@@ -46,7 +46,7 @@ struct VideoPacket
     inline void FreeData() {Packet.Clear();}
 };
 
-const float baseCRF = 15.0f;
+const float baseCRF = 18.0f;
 
 class X264Encoder : public VideoEncoder
 {
@@ -67,6 +67,7 @@ class X264Encoder : public VideoEncoder
 
     List<VideoPacket> CurrentPackets;
     List<BYTE> HeaderPacket;
+    List<BYTE> SEIPacket;
 
     inline void ClearPackets()
     {
@@ -109,6 +110,7 @@ public:
         paramData.rc.i_vbv_buffer_size  = bufferSize; //vbv-bufsize
         paramData.rc.i_rc_method        = X264_RC_CRF;
         paramData.rc.f_rf_constant      = baseCRF+float(10-quality);
+        paramData.vui.b_fullrange       = 0;          //specify full range input levels
 
         //paramData.i_nal_hrd = 1;
 
@@ -120,6 +122,39 @@ public:
 
         //paramData.pf_log                = get_x264_log;
         //paramData.i_log_level           = X264_LOG_INFO;
+
+        BOOL bUseCustomParams = AppConfig->GetInt(TEXT("Video Encoding"), TEXT("UseCustomSettings"));
+        if(bUseCustomParams)
+        {
+            String strCustomParams = AppConfig->GetString(TEXT("Video Encoding"), TEXT("CustomSettings"));
+            Log(TEXT("Using custom x264 settings: \"%s\""), strCustomParams.Array());
+
+            StringList paramList;
+            strCustomParams.GetTokenList(paramList, ' ', FALSE);
+            for(UINT i=0; i<paramList.Num(); i++)
+            {
+                String &strParam = paramList[i];
+                if(!schr(strParam, '='))
+                    continue;
+
+                String strParamName = strParam.GetToken(0, '=');
+                String strParamVal  = strParam.GetTokenOffset(1, '=');
+
+                if( strParamName.CompareI(TEXT("fps")) || 
+                    strParamName.CompareI(TEXT("force-cfr")))
+                {
+                    continue;
+                }
+
+                LPSTR lpParam = strParamName.CreateUTF8String();
+                LPSTR lpVal   = strParamVal.CreateUTF8String();
+
+                x264_param_parse(&paramData, lpParam, lpVal);
+
+                Free(lpParam);
+                Free(lpVal);
+            }
+        }
 
         if(bUse444) paramData.i_csp = X264_CSP_I444;
 
@@ -174,7 +209,24 @@ public:
         {
             x264_nal_t &nal = nalOut[i];
 
-            if(nal.i_type == NAL_SLICE_IDR || nal.i_type == NAL_SLICE)
+            if(nal.i_type == NAL_SEI)
+            {
+                BYTE *skip = nal.p_payload;
+                while(*(skip++) != 0x1);
+                int skipBytes = (int)(skip-nal.p_payload);
+
+                int newPayloadSize = (nal.i_payload-skipBytes);
+                SEIPacket.SetSize(9+newPayloadSize);
+
+                SEIPacket[0] = 0x17;
+                SEIPacket[1] = 1;
+                SEIPacket[2] = 0;
+                SEIPacket[3] = 0;
+                SEIPacket[4] = 0;
+                *(DWORD*)(SEIPacket+5) = htonl(newPayloadSize);
+                mcpy(SEIPacket+9, nal.p_payload+skipBytes, newPayloadSize);
+            }
+            else if(nal.i_type == NAL_SLICE_IDR || nal.i_type == NAL_SLICE)
             {
                 VideoPacket *newPacket = CurrentPackets.CreateNew();
 
@@ -188,7 +240,7 @@ public:
                 newPacket->Packet[0] = ((nal.i_type == NAL_SLICE_IDR) ? 0x17 : 0x27);
                 newPacket->Packet[1] = 1;
                 mcpy(newPacket->Packet+2, timeOffsetAddr, 3);
-                *(DWORD*)(newPacket->Packet+5) = htonl(nal.i_payload-skipBytes);
+                *(DWORD*)(newPacket->Packet+5) = htonl(newPayloadSize);
                 mcpy(newPacket->Packet+9, nal.p_payload+skipBytes, newPayloadSize);
             }
             else if(nal.i_type == NAL_SPS)
@@ -278,6 +330,16 @@ public:
 
         packet.lpPacket = HeaderPacket.Array();
         packet.size     = HeaderPacket.Num();
+
+        traceOut;
+    }
+
+    void GetSEI(DataPacket &packet)
+    {
+        traceIn(X264Encoder::GetHeaders);
+
+        packet.lpPacket = SEIPacket.Array();
+        packet.size     = SEIPacket.Num();
 
         traceOut;
     }

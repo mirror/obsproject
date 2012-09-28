@@ -44,8 +44,8 @@ bool STDCALL ConfigureBitmapSource(XElement *element, bool bCreating);
 
 ImageSource* STDCALL CreateGlobalSource(XElement *data);
 
-NetworkStream* CreateRTMPServer();
-NetworkStream* CreateRTMPPublisher();
+//NetworkStream* CreateRTMPServer();
+NetworkStream* CreateRTMPPublisher(String &failReason, bool &bCanRetry);
 NetworkStream* CreateBandwidthAnalyzer();
 
 void StartBlankSoundPlayback();
@@ -54,6 +54,10 @@ void StopBlankSoundPlayback();
 VideoEncoder* CreateNullVideoEncoder();
 AudioEncoder* CreateNullAudioEncoder();
 NetworkStream* CreateNullNetwork();
+
+VideoFileStream* CreateMP4FileStream(CTSTR lpFile);
+VideoFileStream* CreateFLVFileStream(CTSTR lpFile);
+//VideoFileStream* CreateAVIFileStream(CTSTR lpFile);
 
 void Convert444to420(LPBYTE input, int width, int height, LPBYTE *output, bool bSSE2Available);
 
@@ -334,13 +338,16 @@ public:
     virtual CTSTR GetSceneName() const          {return App->GetSceneElement()->GetName();}
     virtual XElement* GetSceneElement()         {return App->GetSceneElement();}
 
-    virtual bool HotkeyExists(DWORD hotkey) const;
-    virtual bool CreateHotkey(DWORD hotkey, OBSHOTKEYPROC hotkeyProc, UPARAM param);
-    virtual void DeleteHotkey(DWORD hotkey);
+    virtual UINT CreateHotkey(DWORD hotkey, OBSHOTKEYPROC hotkeyProc, UPARAM param);
+    virtual void DeleteHotkey(UINT hotkeyID);
 
     virtual Vect2 GetBaseSize() const           {return Vect2(float(App->baseCX), float(App->baseCY));}
     virtual Vect2 GetRenderFrameSize() const    {return Vect2(float(App->renderFrameWidth), float(App->renderFrameHeight));}
     virtual Vect2 GetOutputSize() const         {return Vect2(float(App->outputCX), float(App->outputCY));}
+
+    virtual void GetBaseSize(UINT &width, UINT &height) const           {App->GetBaseSize(width, height);}
+    virtual void GetRenderFrameSize(UINT &width, UINT &height) const    {App->GetRenderFrameSize(width, height);}
+    virtual void GetOutputSize(UINT &width, UINT &height) const         {App->GetOutputSize(width, height);}
 
     virtual CTSTR GetLanguage() const           {return App->strLanguage;}
 
@@ -427,6 +434,7 @@ OBS::OBS()
     wc.lpfnWndProc = (WNDPROC)OBSProc;
     wc.hIcon = LoadIcon(hinstMain, MAKEINTRESOURCE(IDI_ICON1));
     wc.hbrBackground = (HBRUSH)COLOR_WINDOW;
+    //wc.lpszMenuName = MAKEINTRESOURCE(IDR_MAINMENU);
 
     if(!RegisterClass(&wc))
         CrashError(TEXT("Could not register main window class"));
@@ -441,6 +449,7 @@ OBS::OBS()
 
     borderXSize += GetSystemMetrics(SM_CXSIZEFRAME)*2;
     borderYSize += GetSystemMetrics(SM_CYSIZEFRAME)*2;
+    //borderYSize += GetSystemMetrics(SM_CYMENU);
     borderYSize += GetSystemMetrics(SM_CYCAPTION);
 
     clientWidth  = AppConfig->GetInt(TEXT("General"), TEXT("Width"),  700);
@@ -471,6 +480,9 @@ OBS::OBS()
     if(!hwndMain)
         CrashError(TEXT("Could not create main window"));
 
+    /*HMENU hMenu = GetMenu(hwndMain);
+    LocalizeMenu(hMenu);*/
+
     //-----------------------------------------------------
     // render frame
 
@@ -485,7 +497,7 @@ OBS::OBS()
 
     HWND hwndTemp;
     hwndTemp = CreateWindowEx(WS_EX_CLIENTEDGE, TEXT("LISTBOX"), NULL,
-        WS_CHILDWINDOW|WS_VISIBLE|WS_TABSTOP|LBS_HASSTRINGS|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,
+        WS_CHILDWINDOW|WS_VISIBLE|WS_TABSTOP|LBS_HASSTRINGS|WS_VSCROLL|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT,
         0, 0, 0, 0, hwndMain, (HMENU)ID_SCENES, 0, 0);
     SendMessage(hwndTemp, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
 
@@ -496,7 +508,7 @@ OBS::OBS()
     // elements listbox
 
     hwndTemp = CreateWindowEx(WS_EX_CLIENTEDGE, TEXT("LISTBOX"), NULL,
-        WS_CHILDWINDOW|WS_VISIBLE|WS_TABSTOP|LBS_HASSTRINGS|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT|LBS_EXTENDEDSEL,
+        WS_CHILDWINDOW|WS_VISIBLE|WS_TABSTOP|LBS_HASSTRINGS|WS_VSCROLL|LBS_NOTIFY|LBS_NOINTEGRALHEIGHT|LBS_EXTENDEDSEL,
         0, 0, 0, 0, hwndMain, (HMENU)ID_SOURCES, 0, 0);
     SendMessage(hwndTemp, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
     SetWindowLongPtr(hwndTemp, GWLP_WNDPROC, (LONG_PTR)OBS::ListboxHook);
@@ -674,13 +686,37 @@ OBS::OBS()
     ResizeWindow(false);
     ShowWindow(hwndMain, SW_SHOW);
 
+    //-----------------------------------------------------
+
     for(UINT i=0; i<numScenes; i++)
     {
         XElement *scene = scenes->GetElementByID(i);
         DWORD hotkey = scene->GetInt(TEXT("hotkey"));
         if(hotkey)
-            API->CreateHotkey(hotkey, SceneHotkey, 0);
+        {
+            SceneHotkeyInfo hotkeyInfo;
+            hotkeyInfo.hotkey = hotkey;
+            hotkeyInfo.scene = scene;
+            hotkeyInfo.hotkeyID = API->CreateHotkey(hotkey, SceneHotkey, 0);
+
+            if(hotkeyInfo.hotkeyID)
+                sceneHotkeys << hotkeyInfo;
+        }
     }
+
+    bUsingPushToTalk = AppConfig->GetInt(TEXT("Audio"), TEXT("UsePushToTalk")) != 0;
+    DWORD hotkey = AppConfig->GetInt(TEXT("Audio"), TEXT("PushToTalkHotkey"));
+
+    if(bUsingPushToTalk && hotkey)
+        pushToTalkHotkeyID = API->CreateHotkey(hotkey, OBS::PushToTalkHotkey, NULL);
+
+    hotkey = AppConfig->GetInt(TEXT("Audio"), TEXT("MuteMicHotkey"));
+    if(hotkey)
+        muteMicHotkeyID = API->CreateHotkey(hotkey, OBS::MuteMicHotkey, NULL);
+
+    hotkey = AppConfig->GetInt(TEXT("Audio"), TEXT("MuteDesktopHotkey"));
+    if(hotkey)
+        muteDesktopHotkeyID = API->CreateHotkey(hotkey, OBS::MuteDesktopHotkey, NULL);
 
     //-----------------------------------------------------
     // load plugins
@@ -716,6 +752,11 @@ OBS::OBS()
     }
 
     //-----------------------------------------------------
+
+    bAutoReconnect = AppConfig->GetInt(TEXT("Publish"), TEXT("AutoReconnect"), 1) != 0;
+    reconnectTimeout = AppConfig->GetInt(TEXT("Publish"), TEXT("AutoReconnectTimeout"), 10);
+    if(reconnectTimeout < 5)
+        reconnectTimeout = 5;
 
     bRenderViewEnabled = true;
     //bShowFPS = AppConfig->GetInt(TEXT("General"), TEXT("ShowFPS")) != 0;
@@ -807,6 +848,26 @@ void STDCALL SceneHotkey(DWORD hotkey, UPARAM param, bool bDown)
             }
         }
     }
+}
+
+void STDCALL OBS::PushToTalkHotkey(DWORD hotkey, UPARAM param, bool bDown)
+{
+    App->bPushToTalkOn = bDown;
+}
+
+void STDCALL OBS::MuteMicHotkey(DWORD hotkey, UPARAM param, bool bDown)
+{
+    if(!bDown) return;
+
+    if(App->micAudio)
+        App->micVol = ToggleVolumeControlMute(GetDlgItem(hwndMain, ID_MICVOLUME));
+}
+
+void STDCALL OBS::MuteDesktopHotkey(DWORD hotkey, UPARAM param, bool bDown)
+{
+    if(!bDown) return;
+
+    App->desktopVol = ToggleVolumeControlMute(GetDlgItem(hwndMain, ID_DESKTOPVOLUME));
 }
 
 HICON OBS::GetIcon(HINSTANCE hInst, int resource)
@@ -904,19 +965,30 @@ void OBS::Start()
 
     int networkMode = AppConfig->GetInt(TEXT("Publish"), TEXT("Mode"), 2);
 
+    bool bCanRetry = false;
+    String strError;
+
     if(bTestStream)
-        network = CreateBandwidthAnalyzer();
+        network = CreateNullNetwork();
     else
     {
         switch(networkMode)
         {
-            case 0: network = CreateRTMPPublisher(); break;
-            case 1: network = CreateRTMPServer(); break;
+            case 0: network = CreateRTMPPublisher(strError, bCanRetry); break;
+            case 1: network = CreateNullNetwork(); break;
         }
     }
 
     if(!network)
+    {
+        if(!bReconnecting || !bCanRetry)
+            MessageBox(hwndMain, strError, NULL, MB_ICONERROR);
+        else
+            DialogBox(hinstMain, MAKEINTRESOURCE(IDD_RECONNECTING), hwndMain, OBS::ReconnectDialogProc);
         return;
+    }
+
+    bReconnecting = false;
 
     //-------------------------------------------------------------
 
@@ -1097,6 +1169,27 @@ void OBS::Start()
 
     //-------------------------------------------------------------
 
+    bWriteToFile = networkMode == 1 || AppConfig->GetInt(TEXT("Publish"), TEXT("SaveToFile")) != 0;
+    String strOutputFile = AppConfig->GetString(TEXT("Publish"), TEXT("SavePath"));
+
+    if(OSFileExists(strOutputFile))
+    {
+        strOutputFile.FindReplace(TEXT("\\"), TEXT("/"));
+        String strFileWithoutExtension = GetPathWithoutExtension(strOutputFile);
+        String strFileExtension = GetPathExtension(strOutputFile);
+        UINT curFile = 0;
+
+        String strNewFilePath;
+        do 
+        {
+            strNewFilePath.Clear() << strFileWithoutExtension << TEXT(" (") << FormattedString(TEXT("%02u"), ++curFile) << TEXT(").") << strFileExtension;
+        } while(OSFileExists(strNewFilePath));
+
+        strOutputFile = strNewFilePath;
+    }
+
+    //-------------------------------------------------------------
+
     hRequestAudioEvent = CreateSemaphore(NULL, 0, 0x7FFFFFFFL, NULL);
     hSoundDataMutex = OSCreateMutex();
     hSoundThread = OSCreateThread((XTHREAD)OBS::MainAudioThread, NULL);
@@ -1108,6 +1201,19 @@ void OBS::Start()
     //-------------------------------------------------------------
 
     videoEncoder = CreateX264Encoder(fps, outputCX, outputCY, quality, preset, bUsing444, maxBitRate, bufferSize);
+
+    //-------------------------------------------------------------
+
+    if(!bTestStream && bWriteToFile && strOutputFile.IsValid())
+    {
+        String strFileExtension = GetPathExtension(strOutputFile);
+        if(strFileExtension.CompareI(TEXT("flv")))
+            fileStream = CreateFLVFileStream(strOutputFile);
+        else if(strFileExtension.CompareI(TEXT("mp4")))
+            fileStream = CreateMP4FileStream(strOutputFile);
+        /*else if(strFileExtension.CompareI(TEXT("avi")))
+            fileStream = CreateAVIFileStream(strOutputFile));*/
+    }
 
     hMainThread = OSCreateThread((XTHREAD)OBS::MainCaptureThread, NULL);
 
@@ -1173,13 +1279,15 @@ void OBS::Stop()
     delete micAudio;
     delete desktopAudio;
 
-    delete audioEncoder;
+    delete fileStream;
 
+    delete audioEncoder;
     delete videoEncoder;
 
     network = NULL;
     micAudio = NULL;
     desktopAudio = NULL;
+    fileStream = NULL;
     audioEncoder = NULL;
     videoEncoder = NULL;
 
@@ -1478,7 +1586,7 @@ void OBS::MainCaptureLoop()
 
         SetRenderTarget(mainRenderTextures[curRenderTarget]);
 
-        Ortho(0.0f, baseSize.x, baseSize.y, 0.0f, -1.0f, 1000.0f);
+        Ortho(0.0f, baseSize.x, baseSize.y, 0.0f, -100.0f, 100.0f);
         SetViewport(0, 0, baseSize.x, baseSize.y);
 
         if(scene)
@@ -1531,7 +1639,7 @@ void OBS::MainCaptureLoop()
             LoadVertexShader(mainVertexShader);
             LoadPixelShader(mainPixelShader);
 
-            Ortho(0.0f, renderFrameSize.x, renderFrameSize.y, 0.0f, -1.0f, 1000.0f);
+            Ortho(0.0f, renderFrameSize.x, renderFrameSize.y, 0.0f, -100.0f, 100.0f);
             SetViewport(0.0f, 0.0f, renderFrameSize.x, renderFrameSize.y);
 
             if(bTransitioning)
@@ -1543,7 +1651,7 @@ void OBS::MainCaptureLoop()
 
             DrawSprite(mainRenderTextures[curRenderTarget], 0.0f, 0.0f, renderFrameSize.x, renderFrameSize.y);
 
-            Ortho(0.0f, renderFrameSize.x, renderFrameSize.y, 0.0f, -1.0f, 1000.0f);
+            Ortho(0.0f, renderFrameSize.x, renderFrameSize.y, 0.0f, -100.0f, 100.0f);
 
             LoadVertexShader(solidVertexShader);
             LoadPixelShader(solidPixelShader);
@@ -1552,7 +1660,7 @@ void OBS::MainCaptureLoop()
             //draw selections if in edit mode
             if(bEditMode && !bSizeChanging)
             {
-                Ortho(0.0f, baseSize.x, baseSize.y, 0.0f, -1.0f, 1000.0f);
+                Ortho(0.0f, baseSize.x, baseSize.y, 0.0f, -100.0f, 100.0f);
 
                 if(scene)
                     scene->RenderSelections();
@@ -1602,7 +1710,7 @@ void OBS::MainCaptureLoop()
 
         yuvScalePixelShader->SetVector2(hScaleVal, 1.0f/baseSize);
 
-        Ortho(0.0f, outputSize.x, outputSize.y, 0.0f, -1.0f, 1000.0f);
+        Ortho(0.0f, outputSize.x, outputSize.y, 0.0f, -100.0f, 100.0f);
         SetViewport(0.0f, 0.0f, outputSize.x, outputSize.y);
 
         //why am I using scaleSize instead of outputSize for the texture?
@@ -1615,7 +1723,7 @@ void OBS::MainCaptureLoop()
             BlendFunction(GS_BLEND_FACTOR, GS_BLEND_INVFACTOR, transitionAlpha);
         }
 
-        DrawSpriteEx(mainRenderTextures[curRenderTarget], 0.0f, 0.0f, scaleSize.x, scaleSize.y, 0.0f, 0.0f, scaleSize.x, scaleSize.y);
+        DrawSpriteEx(mainRenderTextures[curRenderTarget], 0.0f, 0.0f, outputSize.x, outputSize.y, 0.0f, 0.0f, outputSize.x, outputSize.y);
 
         //------------------------------------
 
@@ -1727,6 +1835,11 @@ void OBS::MainCaptureLoop()
                     {
                         network->BeginPublishing();
                         bSentHeaders = true;
+
+                        DataPacket seiPacket;
+                        videoEncoder->GetSEI(seiPacket);
+
+                        network->SendPacket(seiPacket.lpPacket, seiPacket.size, 0, PacketType_VideoHighest);
                     }
 
                     OSEnterMutex(hSoundDataMutex);
@@ -1741,6 +1854,9 @@ void OBS::MainCaptureLoop()
                             if(audioData.Num())
                             {
                                 network->SendPacket(audioData.Array(), audioData.Num(), pendingAudioFrames[0].timestamp, PacketType_Audio);
+                                if(fileStream)
+                                    fileStream->AddPacket(audioData.Array(), audioData.Num(), pendingAudioFrames[0].timestamp, PacketType_Audio);
+
                                 audioData.Clear();
                             }
 
@@ -1759,6 +1875,8 @@ void OBS::MainCaptureLoop()
                         PacketType type     = videoPacketTypes[i];
 
                         network->SendPacket(packet.lpPacket, packet.size, curTimeStamp, type);
+                        if(fileStream)
+                            fileStream->AddPacket(packet.lpPacket, packet.size, curTimeStamp, type);
                     }
 
                     curPTS--;
@@ -1837,6 +1955,8 @@ void OBS::MainAudioLoop()
 {
     traceIn(OBS::MainAudioLoop);
 
+    bPushToTalkOn = false;
+
     UINT curAudioFrame = 0;
 
     while(TRUE)
@@ -1854,8 +1974,15 @@ void OBS::MainAudioLoop()
         float *desktopBuffer, *micBuffer;
         UINT desktopAudioFrames, micAudioFrames;
 
+        float curMicVol;
+
+        if(bUsingPushToTalk)
+            curMicVol = bPushToTalkOn ? micVol : 0.0f;
+        else
+            curMicVol = micVol;
+
         bool bDesktopMuted = (desktopVol < EPSILON);
-        bool bMicMuted     = (micAudio == NULL);// || (micVol < EPSILON);
+        bool bMicEnabled   = (micAudio != NULL);
 
         while(QueryNewAudio())
         {
@@ -1867,8 +1994,8 @@ void OBS::MainAudioLoop()
             UINT totalFloats = desktopAudioFrames*2;
 
             MultiplyAudioBuffer(desktopBuffer, totalFloats, desktopVol);
-            if(!bMicMuted)
-                MultiplyAudioBuffer(micBuffer, totalFloats, micVol);
+            if(bMicEnabled)
+                MultiplyAudioBuffer(micBuffer, totalFloats, curMicVol);
 
             //-----------------
             // mix mic and desktop sound, using SSE2 if available
@@ -1878,7 +2005,7 @@ void OBS::MainAudioLoop()
                 desktopBuffer = micBuffer;
                 desktopAudioFrames = micAudioFrames;
             }
-            else if(!bMicMuted)
+            else if(bMicEnabled)
             {
                 UINT floatsLeft    = totalFloats;
                 float *desktopTemp = desktopBuffer;
@@ -2017,27 +2144,10 @@ void OBS::CallHotkey(DWORD hotkeyID, bool bDown)
     hotkeyProc(hotkey, param, bDown);
 }
 
-bool OBSAPIInterface::HotkeyExists(DWORD hotkey) const
-{
-    OSEnterMutex(App->hHotkeyMutex);
-
-    for(UINT i=0; i<hotkeys.Num(); i++)
-    {
-        if(hotkeys[i].hotkey == hotkey)
-        {
-            OSLeaveMutex(App->hHotkeyMutex);
-            return true;
-        }
-    }
-
-    OSLeaveMutex(App->hHotkeyMutex);
-    return false;
-}
-
-bool OBSAPIInterface::CreateHotkey(DWORD hotkey, OBSHOTKEYPROC hotkeyProc, UPARAM param)
+UINT OBSAPIInterface::CreateHotkey(DWORD hotkey, OBSHOTKEYPROC hotkeyProc, UPARAM param)
 {
     if(!hotkey)
-        return false;
+        return 0;
 
     DWORD vk = LOWORD(hotkey);
     DWORD modifier = HIWORD(hotkey);
@@ -2059,15 +2169,15 @@ bool OBSAPIInterface::CreateHotkey(DWORD hotkey, OBSHOTKEYPROC hotkeyProc, UPARA
     hi.bDown        = false;
     OSLeaveMutex(App->hHotkeyMutex);
 
-    return true;
+    return curHotkeyIDVal;
 }
 
-void OBSAPIInterface::DeleteHotkey(DWORD hotkey)
+void OBSAPIInterface::DeleteHotkey(UINT hotkeyID)
 {
     OSEnterMutex(App->hHotkeyMutex);
     for(UINT i=0; i<hotkeys.Num(); i++)
     {
-        if(hotkeys[i].hotkey == hotkey)
+        if(hotkeys[i].hotkeyID == hotkeyID)
         {
             hotkeys.Remove(i);
             break;
@@ -2102,6 +2212,7 @@ void OBSAPIInterface::HandleHotkeys()
         {
             short keyState   = GetAsyncKeyState(hotkeyVK);
             bool bDown       = (keyState & 0x8000) != 0;
+            bool bWasPressed = (keyState & 0x1) != 0;
 
             if(bDown)
             {
@@ -2110,6 +2221,13 @@ void OBSAPIInterface::HandleHotkeys()
 
                 info.bDown = bDown;
                 continue;
+            }
+            else if(bWasPressed)
+            {
+                if(!info.bDown)
+                    PostMessage(hwndMain, OBS_CALLHOTKEY, TRUE, info.hotkeyID);
+
+                info.bDown = true;
             }
         }
 

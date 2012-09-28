@@ -358,12 +358,28 @@ public:
 
         rtmp = rtmpIn;
 
-        sendBuffer.SetSize(32768);
+        BOOL bUseSendBuffer = AppConfig->GetInt(TEXT("Publish"), TEXT("UseSendBuffer"), 1);
+        UINT sendBufferSize = AppConfig->GetInt(TEXT("Publish"), TEXT("SendBufferSize"), 32768);
+
+        if(sendBufferSize > 32768)
+            sendBufferSize = 32768;
+        else if(sendBufferSize < 8192)
+            sendBufferSize = 8192;
+
+        sendBuffer.SetSize(sendBufferSize);
         curSendBufferLen = 0;
 
-        rtmp->m_customSendFunc = (CUSTOMSEND)RTMPPublisher::BufferedSend;
-        rtmp->m_customSendParam = this;
-        rtmp->m_bCustomSend = TRUE;
+        if(bUseSendBuffer)
+        {
+            if(sendBufferSize != 32768)
+                Log(TEXT("Send Buffer Size: %u"), sendBufferSize);
+
+            rtmp->m_customSendFunc = (CUSTOMSEND)RTMPPublisher::BufferedSend;
+            rtmp->m_customSendParam = this;
+            rtmp->m_bCustomSend = TRUE;
+        }
+        else
+            Log(TEXT("Not using send buffering"));
 
         hSendSempahore = CreateSemaphore(NULL, 0, 0x7FFFFFFFL, NULL);
         if(!hSendSempahore)
@@ -494,16 +510,13 @@ public:
 
         packet.m_nChannel = 0x03;     // control channel (invoke)
         packet.m_headerType = RTMP_PACKET_SIZE_LARGE;
-        packet.m_packetType = RTMP_PACKET_TYPE_INVOKE;
+        packet.m_packetType = RTMP_PACKET_TYPE_INFO;
         packet.m_nTimeStamp = 0;
         packet.m_nInfoField2 = rtmp->m_stream_id;
         packet.m_hasAbsTimestamp = TRUE;
         packet.m_body = pbuf + RTMP_MAX_HEADER_SIZE;
 
         char *enc = packet.m_body;
-        enc = AMF_EncodeString(enc, pend, &av_send);
-        enc = AMF_EncodeNumber(enc, pend, ++rtmp->m_numInvokes);
-        *enc++ = AMF_NULL;
         enc = AMF_EncodeString(enc, pend, &av_setDataFrame);
         enc = AMF_EncodeString(enc, pend, &av_onMetaData);
         enc = App->EncMetaData(enc, pend);
@@ -517,14 +530,15 @@ public:
 
         //----------------------------------------------
 
-        packet.m_nChannel = 0x04; // source channel
-        packet.m_headerType = RTMP_PACKET_SIZE_LARGE;
-        packet.m_packetType = RTMP_PACKET_TYPE_VIDEO;
-
         List<BYTE> packetPadding;
-
         DataPacket mediaHeaders;
-        App->GetVideoHeaders(mediaHeaders);
+
+        //----------------------------------------------
+
+        packet.m_nChannel = 0x05; // source channel
+        packet.m_packetType = RTMP_PACKET_TYPE_AUDIO;
+
+        App->GetAudioHeaders(mediaHeaders);
 
         packetPadding.SetSize(RTMP_MAX_HEADER_SIZE);
         packetPadding.AppendArray(mediaHeaders.lpPacket, mediaHeaders.size);
@@ -539,10 +553,11 @@ public:
 
         //----------------------------------------------
 
-        packet.m_nChannel = 0x05; // source channel
-        packet.m_packetType = RTMP_PACKET_TYPE_AUDIO;
+        packet.m_nChannel = 0x04; // source channel
+        packet.m_headerType = RTMP_PACKET_SIZE_LARGE;
+        packet.m_packetType = RTMP_PACKET_TYPE_VIDEO;
 
-        App->GetAudioHeaders(mediaHeaders);
+        App->GetVideoHeaders(mediaHeaders);
 
         packetPadding.SetSize(RTMP_MAX_HEADER_SIZE);
         packetPadding.AppendArray(mediaHeaders.lpPacket, mediaHeaders.size);
@@ -569,12 +584,14 @@ public:
     }
 };
 
-NetworkStream* CreateRTMPPublisher()
+NetworkStream* CreateRTMPPublisher(String &failReason, bool &bCanRetry)
 {
     traceIn(CreateRTMPPublisher);
 
     //------------------------------------------------------
     // set up URL
+
+    bCanRetry = false;
 
     String strURL;
 
@@ -585,13 +602,13 @@ NetworkStream* CreateRTMPPublisher()
 
     if(!strServer.IsValid())
     {
-        MessageBox(hwndMain, TEXT("No server specified to connect to"), NULL, MB_ICONERROR);
+        failReason = TEXT("No server specified to connect to");
         return NULL;
     }
 
     if(!strChannel.IsValid())
     {
-        MessageBox(hwndMain, TEXT("No channel specified"), NULL, MB_ICONERROR);
+        failReason = TEXT("No channel specified");
         return NULL;
     }
 
@@ -600,35 +617,35 @@ NetworkStream* CreateRTMPPublisher()
         XConfig serverData;
         if(!serverData.Open(TEXT("services.xconfig")))
         {
-            MessageBox(hwndMain, TEXT("Could not open services.xconfig"), NULL, MB_ICONERROR);
+            failReason = TEXT("Could not open services.xconfig");
             return NULL;
         }
 
         XElement *services = serverData.GetElement(TEXT("services"));
         if(!services)
         {
-            MessageBox(hwndMain, TEXT("Could not any services in services.xconfig"), NULL, MB_ICONERROR);
+            failReason = TEXT("Could not any services in services.xconfig");
             return NULL;
         }
 
         XElement *service = services->GetElementByID(serviceID-1);
         if(!service)
         {
-            MessageBox(hwndMain, TEXT("Could not find the service specified in services.xconfig"), NULL, MB_ICONERROR);
+            failReason = TEXT("Could not find the service specified in services.xconfig");
             return NULL;
         }
 
         XElement *servers = service->GetElement(TEXT("servers"));
         if(!servers)
         {
-            MessageBox(hwndMain, TEXT("Could not find any servers for the service specified in services.xconfig"), NULL, MB_ICONERROR);
+            failReason = TEXT("Could not find any servers for the service specified in services.xconfig");
             return NULL;
         }
 
         XDataItem *item = servers->GetDataItem(strServer);
         if(!item)
         {
-            MessageBox(hwndMain, TEXT("Could not find any server specified for the service specified in services.xconfig"), NULL, MB_ICONERROR);
+            failReason = TEXT("Could not find any server specified for the service specified in services.xconfig");
             return NULL;
         }
 
@@ -650,7 +667,7 @@ NetworkStream* CreateRTMPPublisher()
 
     if(!RTMP_SetupURL(rtmp, lpAnsiURL))
     {
-        MessageBox(hwndMain, Str("Connection.CouldNotParseURL"), NULL, MB_ICONERROR);
+        failReason = Str("Connection.CouldNotParseURL");
         RTMP_Free(rtmp);
         return NULL;
     }
@@ -661,14 +678,15 @@ NetworkStream* CreateRTMPPublisher()
 
     if(!RTMP_Connect(rtmp, NULL))
     {
-        MessageBox(hwndMain, Str("Connection.CouldNotConnect"), NULL, MB_ICONERROR);
+        failReason = Str("Connection.CouldNotConnect");
         RTMP_Free(rtmp);
+        bCanRetry = true;
         return NULL;
     }
 
     if(!RTMP_ConnectStream(rtmp, 0))
     {
-        MessageBox(hwndMain, Str("Connection.InvalidStream"), NULL, MB_ICONERROR);
+        failReason = Str("Connection.InvalidStream");
         RTMP_Close(rtmp);
         RTMP_Free(rtmp);
         return NULL;

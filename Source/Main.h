@@ -61,7 +61,7 @@ extern ConfigFile   *AppConfig;
 extern OBS          *App;
 extern TCHAR        lpAppDataPath[MAX_PATH];
 
-#define OBS_VERSION_STRING_ANSI "Open Broadcaster Software v0.381a"
+#define OBS_VERSION_STRING_ANSI "Open Broadcaster Software v0.40a"
 #define OBS_VERSION_STRING TEXT(OBS_VERSION_STRING_ANSI)
 
 #define OBS_WINDOW_CLASS      TEXT("OBSWindowClass")
@@ -71,6 +71,16 @@ inline UINT ConvertMSTo100NanoSec(UINT ms)
 {
     return ms*1000*10; //1000 microseconds, then 10 "100nanosecond" segments
 }
+
+//big endian conversion functions
+#define QWORD_BE(val) (((val>>56)&0xFF) | (((val>>48)&0xFF)<<8) | (((val>>40)&0xFF)<<16) | (((val>>32)&0xFF)<<24) | \
+    (((val>>24)&0xFF)<<32) | (((val>>16)&0xFF)<<40) | (((val>>8)&0xFF)<<48) | ((val&0xFF)<<56))
+#define DWORD_BE(val) (((val>>24)&0xFF) | (((val>>16)&0xFF)<<8) | (((val>>8)&0xFF)<<16) | ((val&0xFF)<<24))
+#define WORD_BE(val)  (((val>>8)&0xFF) | ((val&0xFF)<<8))
+
+__forceinline QWORD fastHtonll(QWORD qw) {return QWORD_BE(qw);}
+__forceinline DWORD fastHtonl (DWORD dw) {return DWORD_BE(dw);}
+__forceinline  WORD fastHtons (WORD  w)  {return  WORD_BE(w);}
 
 
 //-------------------------------------------

@@ -26,7 +26,7 @@ enum SettingsSelection
     Settings_Publish,
     Settings_Video,
     Settings_Audio,
-    Settings_Hotkeys,
+    Settings_Advanced,
 };
 
 BOOL CALLBACK MonitorInfoEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, List<MonitorInfo> &monitors);
@@ -531,6 +531,23 @@ enum
     PublishMode_BandwidthInfo
 };
 
+struct PublishDialogData
+{
+    UINT mode;
+    LONG fileControlOffset;
+};
+
+void AdjustWindowPos(HWND hwnd, LONG xOffset, LONG yOffset)
+{
+    RECT rc;
+
+    HWND hwndParent = GetParent(hwnd);
+    GetWindowRect(hwnd, &rc);
+    ScreenToClient(hwndParent, (LPPOINT)&rc);
+
+    SetWindowPos(hwnd, NULL, rc.left+xOffset, rc.top+yOffset, 0, 0, SWP_NOSIZE|SWP_NOZORDER|SWP_NOOWNERZORDER);
+}
+
 INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     HWND hwndTemp;
@@ -541,14 +558,23 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
             {
                 LocalizeWindow(hwnd);
 
+                PublishDialogData *data = new PublishDialogData;
+                SetWindowLongPtr(hwnd, DWLP_USER, (LONG_PTR)data);
+
+                RECT serviceRect, saveToFileRect;
+                GetWindowRect(GetDlgItem(hwnd, IDC_SERVICE), &serviceRect);
+                GetWindowRect(GetDlgItem(hwnd, IDC_SAVEPATH), &saveToFileRect);
+
+                data->fileControlOffset = saveToFileRect.top-serviceRect.top;
+
                 //--------------------------------------------
 
                 hwndTemp = GetDlgItem(hwnd, IDC_MODE);
                 SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)Str("Settings.Publish.Mode.LiveStream"));
-                SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)Str("Settings.Publish.Mode.Serve"));
-                //SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)Str("Settings.Publish.Mode.SaveToFile"));
+                SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)Str("Settings.Publish.Mode.FileOnly"));
 
                 int mode = LoadSettingComboInt(hwndTemp, TEXT("Publish"), TEXT("Mode"), 0, 2);
+                data->mode = mode;
 
                 //--------------------------------------------
 
@@ -634,6 +660,30 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
 
                 if(mode != 0) ShowWindow(hwndTemp, SW_HIDE);
 
+                //--------------------------------------------
+
+                hwndTemp = GetDlgItem(hwnd, IDC_AUTORECONNECT);
+
+                BOOL bAutoReconnect = AppConfig->GetInt(TEXT("Publish"), TEXT("AutoReconnect"), 1);
+                SendMessage(hwndTemp, BM_SETCHECK, bAutoReconnect ? BST_CHECKED : BST_UNCHECKED, 0);
+
+                if(mode != 0) ShowWindow(hwndTemp, SW_HIDE);
+
+                hwndTemp = GetDlgItem(hwnd, IDC_AUTORECONNECT_TIMEOUT);
+                EnableWindow(GetDlgItem(hwnd, IDC_AUTORECONNECT_TIMEOUT_EDIT), bAutoReconnect);
+                EnableWindow(hwndTemp, bAutoReconnect);
+
+                int retryTime = AppConfig->GetInt(TEXT("Publish"), TEXT("AutoReconnectTimeout"), 10);
+                if(retryTime > 60)      retryTime = 60;
+                else if(retryTime < 5)  retryTime = 5;
+
+                SendMessage(hwndTemp, UDM_SETRANGE32, 5, 60);
+                SendMessage(hwndTemp, UDM_SETPOS32, 0, retryTime);
+
+                if(mode != 0) ShowWindow(hwndTemp, SW_HIDE);
+
+                //--------------------------------------------
+
                 if(mode != 0)
                 {
                     ShowWindow(GetDlgItem(hwnd, IDC_SERVICE_STATIC), SW_HIDE);
@@ -641,12 +691,52 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                     ShowWindow(GetDlgItem(hwnd, IDC_PLAYPATH_STATIC), SW_HIDE);
                     ShowWindow(GetDlgItem(hwnd, IDC_CHANNELNAME_STATIC), SW_HIDE);
                     ShowWindow(GetDlgItem(hwnd, IDC_SERVER_STATIC), SW_HIDE);
+                    ShowWindow(GetDlgItem(hwnd, IDC_AUTORECONNECT_TIMEOUT_STATIC), SW_HIDE);
+                    ShowWindow(GetDlgItem(hwnd, IDC_AUTORECONNECT_TIMEOUT_EDIT), SW_HIDE);
+                    ShowWindow(GetDlgItem(hwnd, IDC_SAVETOFILE), SW_HIDE);
+
+                    AdjustWindowPos(GetDlgItem(hwnd, IDC_SAVEPATH_STATIC), 0, -data->fileControlOffset);
+                    AdjustWindowPos(GetDlgItem(hwnd, IDC_SAVEPATH), 0, -data->fileControlOffset);
+                    AdjustWindowPos(GetDlgItem(hwnd, IDC_BROWSE), 0, -data->fileControlOffset);
                 }
+
+                //--------------------------------------------
+
+                BOOL bSaveToFile = AppConfig->GetInt(TEXT("Publish"), TEXT("SaveToFile"));
+                SendMessage(GetDlgItem(hwnd, IDC_SAVETOFILE), BM_SETCHECK, bSaveToFile ? BST_CHECKED : BST_UNCHECKED, 0);
+
+                CTSTR lpSavePath = AppConfig->GetStringPtr(TEXT("Publish"), TEXT("SavePath"));
+                SetWindowText(GetDlgItem(hwnd, IDC_SAVEPATH), lpSavePath);
+
+                EnableWindow(GetDlgItem(hwnd, IDC_SAVEPATH), bSaveToFile || (mode != 0));
+                EnableWindow(GetDlgItem(hwnd, IDC_BROWSE),   bSaveToFile || (mode != 0));
+
+                //--------------------------------------------
 
                 ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_HIDE);
                 App->SetChangedSettings(false);
 
                 return TRUE;
+            }
+
+        case WM_DESTROY:
+            {
+                PublishDialogData *data = (PublishDialogData*)GetWindowLongPtr(hwnd, DWLP_USER);
+                delete data;
+            }
+            break;
+
+        case WM_NOTIFY:
+            {
+                NMHDR *nmHdr = (NMHDR*)lParam;
+
+                if(nmHdr->idFrom == IDC_AUTORECONNECT_TIMEOUT)
+                {
+                    if(nmHdr->code == UDN_DELTAPOS)
+                        App->SetChangedSettings(true);
+                }
+
+                break;
             }
 
         case WM_COMMAND:
@@ -659,6 +749,8 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                         {
                             if(HIWORD(wParam) != CBN_SELCHANGE)
                                 break;
+
+                            PublishDialogData *data = (PublishDialogData*)GetWindowLongPtr(hwnd, DWLP_USER);
 
                             int mode = (int)SendMessage((HWND)lParam, CB_GETCURSEL, 0, 0);
                             int swShowControls = (mode == 0) ? SW_SHOW : SW_HIDE;
@@ -680,11 +772,35 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                                 ShowWindow(GetDlgItem(hwnd, IDC_SERVEREDIT), SW_HIDE);
                             }
 
+                            BOOL bSaveToFile = SendMessage(GetDlgItem(hwnd, IDC_SAVETOFILE), BM_GETCHECK, 0, 0) != BST_UNCHECKED;
+                            EnableWindow(GetDlgItem(hwnd, IDC_SAVEPATH), bSaveToFile || (mode != 0));
+                            EnableWindow(GetDlgItem(hwnd, IDC_BROWSE),   bSaveToFile || (mode != 0));
+
+                            if(mode == 0 && data->mode == 1)
+                            {
+                                AdjustWindowPos(GetDlgItem(hwnd, IDC_SAVEPATH_STATIC), 0, data->fileControlOffset);
+                                AdjustWindowPos(GetDlgItem(hwnd, IDC_SAVEPATH), 0, data->fileControlOffset);
+                                AdjustWindowPos(GetDlgItem(hwnd, IDC_BROWSE), 0, data->fileControlOffset);
+                            }
+                            else if(mode == 1 && data->mode == 0)
+                            {
+                                AdjustWindowPos(GetDlgItem(hwnd, IDC_SAVEPATH_STATIC), 0, -data->fileControlOffset);
+                                AdjustWindowPos(GetDlgItem(hwnd, IDC_SAVEPATH), 0, -data->fileControlOffset);
+                                AdjustWindowPos(GetDlgItem(hwnd, IDC_BROWSE), 0, -data->fileControlOffset);
+                            }
+
+                            data->mode = mode;
+
                             ShowWindow(GetDlgItem(hwnd, IDC_SERVICE_STATIC), swShowControls);
                             //ShowWindow(GetDlgItem(hwnd, IDC_USERNAME_STATIC), swShowControls);
                             ShowWindow(GetDlgItem(hwnd, IDC_PLAYPATH_STATIC), swShowControls);
                             ShowWindow(GetDlgItem(hwnd, IDC_CHANNELNAME_STATIC), swShowControls);
                             ShowWindow(GetDlgItem(hwnd, IDC_SERVER_STATIC), swShowControls);
+                            ShowWindow(GetDlgItem(hwnd, IDC_AUTORECONNECT), swShowControls);
+                            ShowWindow(GetDlgItem(hwnd, IDC_AUTORECONNECT_TIMEOUT), swShowControls);
+                            ShowWindow(GetDlgItem(hwnd, IDC_AUTORECONNECT_TIMEOUT_STATIC), swShowControls);
+                            ShowWindow(GetDlgItem(hwnd, IDC_AUTORECONNECT_TIMEOUT_EDIT), swShowControls);
+                            ShowWindow(GetDlgItem(hwnd, IDC_SAVETOFILE), swShowControls);
 
                             bDataChanged = true;
                             break;
@@ -754,10 +870,94 @@ INT_PTR CALLBACK OBS::PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam
                         }
                         break;
 
-                    //case IDC_USERNAME:
+                    case IDC_AUTORECONNECT:
+                        if(HIWORD(wParam) == BN_CLICKED)
+                        {
+                            BOOL bAutoReconnect = SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED;
+
+                            EnableWindow(GetDlgItem(hwnd, IDC_AUTORECONNECT_TIMEOUT),       bAutoReconnect);
+                            EnableWindow(GetDlgItem(hwnd, IDC_AUTORECONNECT_TIMEOUT_EDIT),  bAutoReconnect);
+
+                            App->SetChangedSettings(true);
+                        }
+                        break;
+
+                    case IDC_AUTORECONNECT_TIMEOUT_EDIT:
+                        if(HIWORD(wParam) == EN_CHANGE)
+                            App->SetChangedSettings(true);
+                        break;
+
+                    case IDC_SAVETOFILE:
+                        if(HIWORD(wParam) == BN_CLICKED)
+                        {
+                            BOOL bSaveToFile = SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED;
+
+                            EnableWindow(GetDlgItem(hwnd, IDC_SAVEPATH), bSaveToFile);
+                            EnableWindow(GetDlgItem(hwnd, IDC_BROWSE),   bSaveToFile);
+
+                            bDataChanged = true;
+                        }
+                        break;
+
+                    case IDC_BROWSE:
+                        {
+                            TCHAR lpFile[512];
+                            OPENFILENAME ofn;
+                            zero(&ofn, sizeof(ofn));
+                            ofn.lStructSize = sizeof(ofn);
+                            ofn.hwndOwner = hwnd;
+                            ofn.lpstrFile = lpFile;
+                            ofn.nMaxFile = 511;
+                            ofn.lpstrFile[0] = 0;
+                            ofn.lpstrFilter = TEXT("MP4 File (*.mp4)\0*.mp4\0Flash Video File (*.flv)\0*.flv\0");
+                            ofn.lpstrFileTitle = NULL;
+                            ofn.nMaxFileTitle = 0;
+                            ofn.nFilterIndex = 1;
+                            ofn.lpstrInitialDir = AppConfig->GetStringPtr(TEXT("Publish"), TEXT("LastSaveDir"));
+
+                            ofn.Flags = OFN_PATHMUSTEXIST;
+
+                            TCHAR curDirectory[512];
+                            GetCurrentDirectory(511, curDirectory);
+
+                            BOOL bChoseFile = GetSaveFileName(&ofn);
+                            SetCurrentDirectory(curDirectory);
+
+                            if(bChoseFile)
+                            {
+                                String strFile = lpFile;
+                                strFile.FindReplace(TEXT("\\"), TEXT("/"));
+
+                                String strExtension = GetPathExtension(strFile);
+                                if(strExtension.IsEmpty() || (!strExtension.CompareI(TEXT("flv")) && /*!strExtension.CompareI(TEXT("avi")) &&*/ !strExtension.CompareI(TEXT("mp4"))))
+                                {
+                                    switch(ofn.nFilterIndex)
+                                    {
+                                        case 1:
+                                            strFile << TEXT(".mp4"); break;
+                                        case 2:
+                                            strFile << TEXT(".flv"); break;
+                                        /*case 3:
+                                            strFile << TEXT(".avi"); break;*/
+                                    }
+                                }
+
+                                String strFilePath = GetPathDirectory(strFile).FindReplace(TEXT("/"), TEXT("\\")) << TEXT("\\");
+                                AppConfig->SetString(TEXT("Publish"), TEXT("LastSaveDir"), strFilePath);
+
+                                strFile.FindReplace(TEXT("/"), TEXT("\\"));
+                                SetWindowText(GetDlgItem(hwnd, IDC_SAVEPATH), strFile);
+                                bDataChanged = true;
+                            }
+
+                            break;
+                        }
+
+                        //case IDC_USERNAME:
                     case IDC_PLAYPATH:
                     case IDC_CHANNELNAME:
                     case IDC_SERVEREDIT:
+                    case IDC_SAVEPATH:
                         if(HIWORD(wParam) == EN_CHANGE)
                             bDataChanged = true;
                         break;
@@ -945,10 +1145,10 @@ INT_PTR CALLBACK OBS::VideoSettingsProc(HWND hwnd, UINT message, WPARAM wParam, 
                 //--------------------------------------------
 
                 hwndTemp = GetDlgItem(hwnd, IDC_FPS);
-                SendMessage(hwndTemp, UDM_SETRANGE32, 5, 60);
+                SendMessage(hwndTemp, UDM_SETRANGE32, 15, 60);
 
                 int fps = AppConfig->GetInt(TEXT("Video"), TEXT("FPS"), 25);
-                if(!AppConfig->HasKey(TEXT("Video"), TEXT("FPS")) || fps < 5 || fps > 60)
+                if(!AppConfig->HasKey(TEXT("Video"), TEXT("FPS")) || fps < 15 || fps > 60)
                 {
                     AppConfig->SetInt(TEXT("Video"), TEXT("FPS"), 25);
                     fps = 25;
@@ -1114,6 +1314,30 @@ INT_PTR CALLBACK OBS::AudioSettingsProc(HWND hwnd, UINT message, WPARAM wParam, 
                 }
 
                 SetWindowLongPtr(hwnd, DWLP_USER, (LONG_PTR)audioDevices);
+
+                //--------------------------------------------
+
+                BOOL bPushToTalk = AppConfig->GetInt(TEXT("Audio"), TEXT("UsePushToTalk"));
+                SendMessage(GetDlgItem(hwnd, IDC_PUSHTOTALK), BM_SETCHECK, bPushToTalk ? BST_CHECKED : BST_UNCHECKED, 0);
+                EnableWindow(GetDlgItem(hwnd, IDC_PUSHTOTALKHOTKEY), bPushToTalk);
+                EnableWindow(GetDlgItem(hwnd, IDC_CLEARPUSHTOTALK), bPushToTalk);
+
+                DWORD hotkey = AppConfig->GetInt(TEXT("Audio"), TEXT("PushToTalkHotkey"));
+                SendMessage(GetDlgItem(hwnd, IDC_PUSHTOTALKHOTKEY), HKM_SETHOTKEY, hotkey, 0);
+
+                //--------------------------------------------
+
+                hotkey = AppConfig->GetInt(TEXT("Audio"), TEXT("MuteMicHotkey"));
+                SendMessage(GetDlgItem(hwnd, IDC_MUTEMICHOTKEY), HKM_SETHOTKEY, hotkey, 0);
+
+                //--------------------------------------------
+
+                hotkey = AppConfig->GetInt(TEXT("Audio"), TEXT("MuteDesktopHotkey"));
+                SendMessage(GetDlgItem(hwnd, IDC_MUTEDESKTOPHOTKEY), HKM_SETHOTKEY, hotkey, 0);
+
+                //--------------------------------------------
+
+                App->SetChangedSettings(false);
                 return TRUE;
             }
 
@@ -1129,6 +1353,47 @@ INT_PTR CALLBACK OBS::AudioSettingsProc(HWND hwnd, UINT message, WPARAM wParam, 
 
                 switch(LOWORD(wParam))
                 {
+                    case IDC_PUSHTOTALK:
+                        if(HIWORD(wParam) == BN_CLICKED)
+                        {
+                            BOOL bUsePushToTalk = SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                            EnableWindow(GetDlgItem(hwnd, IDC_PUSHTOTALKHOTKEY), bUsePushToTalk);
+                            EnableWindow(GetDlgItem(hwnd, IDC_CLEARPUSHTOTALK), bUsePushToTalk);
+                            App->SetChangedSettings(true);
+                        }
+                        break;
+
+                    case IDC_PUSHTOTALKHOTKEY:
+                    case IDC_MUTEMICHOTKEY:
+                    case IDC_MUTEDESKTOPHOTKEY:
+                        if(HIWORD(wParam) == EN_CHANGE)
+                            App->SetChangedSettings(true);
+                        break;
+
+                    case IDC_CLEARPUSHTOTALK:
+                        if(HIWORD(wParam) == BN_CLICKED)
+                        {
+                            SendMessage(GetDlgItem(hwnd, IDC_PUSHTOTALKHOTKEY), HKM_SETHOTKEY, 0, 0);
+                            App->SetChangedSettings(true);
+                        }
+                        break;
+
+                    case IDC_CLEARMUTEMIC:
+                        if(HIWORD(wParam) == BN_CLICKED)
+                        {
+                            SendMessage(GetDlgItem(hwnd, IDC_MUTEMICHOTKEY), HKM_SETHOTKEY, 0, 0);
+                            App->SetChangedSettings(true);
+                        }
+                        break;
+
+                    case IDC_CLEARMUTEDESKTOP:
+                        if(HIWORD(wParam) == BN_CLICKED)
+                        {
+                            SendMessage(GetDlgItem(hwnd, IDC_MUTEDESKTOPHOTKEY), HKM_SETHOTKEY, 0, 0);
+                            App->SetChangedSettings(true);
+                        }
+                        break;
+
                     case IDC_MICDEVICES:
                         if(HIWORD(wParam) == CBN_SELCHANGE)
                             bDataChanged = true;
@@ -1146,14 +1411,120 @@ INT_PTR CALLBACK OBS::AudioSettingsProc(HWND hwnd, UINT message, WPARAM wParam, 
     return FALSE;
 }
 
-INT_PTR CALLBACK OBS::HotkeysSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     switch(message)
     {
         case WM_INITDIALOG:
-            LocalizeWindow(hwnd);
-            App->SetChangedSettings(false);
-            return TRUE;
+            {
+                LocalizeWindow(hwnd);
+
+                //--------------------------------------------
+
+                HWND hwndToolTip = CreateWindowEx(NULL, TOOLTIPS_CLASS, NULL, WS_POPUP|TTS_NOPREFIX|TTS_ALWAYSTIP,
+                    CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
+                    hwnd, NULL, hinstMain, NULL);
+
+                TOOLINFO ti;
+                zero(&ti, sizeof(ti));
+                ti.cbSize = sizeof(ti);
+                ti.uFlags = TTF_SUBCLASS|TTF_IDISHWND;
+                ti.hwnd = hwnd;
+
+                SendMessage(hwndToolTip, TTM_SETMAXTIPWIDTH, 0, 500);
+                SendMessage(hwndToolTip, TTM_SETDELAYTIME, TTDT_AUTOPOP, 14000);
+
+                //------------------------------------
+
+                bool bUseCustomX264Settings = AppConfig->GetInt(TEXT("Video Encoding"), TEXT("UseCustomSettings")) != 0;
+                String strX264Settings = AppConfig->GetString(TEXT("Video Encoding"), TEXT("CustomSettings"));
+
+                SendMessage(GetDlgItem(hwnd, IDC_USEVIDEOENCODERSETTINGS), BM_SETCHECK, bUseCustomX264Settings ? BST_CHECKED : BST_UNCHECKED, 0);
+                SetWindowText(GetDlgItem(hwnd, IDC_VIDEOENCODERSETTINGS), strX264Settings);
+
+                ti.lpszText = (LPWSTR)Str("Settings.Advanced.VideoEncoderSettingsTooltip");
+                ti.uId = (UINT_PTR)GetDlgItem(hwnd, IDC_VIDEOENCODERSETTINGS);
+                SendMessage(hwndToolTip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+
+                ti.uId = (UINT_PTR)GetDlgItem(hwnd, IDC_USEVIDEOENCODERSETTINGS);
+                SendMessage(hwndToolTip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+
+                EnableWindow(GetDlgItem(hwnd, IDC_VIDEOENCODERSETTINGS), bUseCustomX264Settings);
+
+                //------------------------------------
+
+                bool bUseVideoSyncFix = AppConfig->GetInt(TEXT("Video Encoding"), TEXT("UseSyncFix")) != 0;
+                SendMessage(GetDlgItem(hwnd, IDC_USESYNCFIX), BM_SETCHECK, bUseVideoSyncFix ? BST_CHECKED : BST_UNCHECKED, 0);
+
+                ti.lpszText = (LPWSTR)Str("Settings.Advanced.UseSyncFixTooltip");
+                ti.uId = (UINT_PTR)GetDlgItem(hwnd, IDC_USESYNCFIX);
+                SendMessage(hwndToolTip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+
+                //------------------------------------
+
+                BOOL bUseSendBuffer = AppConfig->GetInt(TEXT("Publish"), TEXT("UseSendBuffer"), 1) != 0;
+                SendMessage(GetDlgItem(hwnd, IDC_USESENDBUFFER), BM_SETCHECK, bUseSendBuffer ? BST_CHECKED : BST_UNCHECKED, 0);
+
+                HWND hwndTemp = GetDlgItem(hwnd, IDC_SENDBUFFERSIZE);
+                EnableWindow(hwndTemp, bUseSendBuffer);
+                SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("32768"));
+                SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("16384"));
+                SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("8192"));
+
+                LoadSettingTextComboString(hwndTemp, TEXT("Publish"), TEXT("SendBufferSize"), TEXT("32768"));
+
+                ti.lpszText = (LPWSTR)Str("Settings.Advanced.UseSendBufferTooltip");
+                ti.uId = (UINT_PTR)GetDlgItem(hwnd, IDC_USESENDBUFFER);
+                SendMessage(hwndToolTip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+
+                //------------------------------------
+
+                App->SetChangedSettings(false);
+                return TRUE;
+            }
+
+        case WM_COMMAND:
+            switch(LOWORD(wParam))
+            {
+                case IDC_USEVIDEOENCODERSETTINGS:
+                    if(HIWORD(wParam) == BN_CLICKED)
+                    {
+                        BOOL bUseVideoSyncFix = SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        EnableWindow(GetDlgItem(hwnd, IDC_VIDEOENCODERSETTINGS), bUseVideoSyncFix);
+
+                        ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_SHOW);
+                        App->SetChangedSettings(true);
+                    }
+                    break;
+
+                case IDC_USESENDBUFFER:
+                    if(HIWORD(wParam) == BN_CLICKED)
+                    {
+                        BOOL bUseSendBuffer = SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        EnableWindow(GetDlgItem(hwnd, IDC_SENDBUFFERSIZE), bUseSendBuffer);
+
+                        ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_SHOW);
+                        App->SetChangedSettings(true);
+                    }
+                    break;
+
+                case IDC_SENDBUFFERSIZE:
+                    if(HIWORD(wParam) == CBN_SELCHANGE)
+                    {
+                        ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_SHOW);
+                        App->SetChangedSettings(true);
+                    }
+                    break;
+
+                case IDC_USESYNCFIX:
+                    if(HIWORD(wParam) == BN_CLICKED)
+                    {
+                        ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_SHOW);
+                        App->SetChangedSettings(true);
+                    }
+                    break;
+            }
+
     }
     return FALSE;
 }
@@ -1224,6 +1595,30 @@ void OBS::ApplySettings()
                     strTemp = GetCBText(GetDlgItem(hwndCurrentSettings, IDC_SERVERLIST));
                     AppConfig->SetString(TEXT("Publish"), TEXT("Server"), strTemp);
                 }
+
+                //------------------------------------------
+
+                App->bAutoReconnect = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_AUTORECONNECT), BM_GETCHECK, 0, 0) == BST_CHECKED;
+
+                BOOL bError = FALSE;
+                App->reconnectTimeout = (UINT)SendMessage(GetDlgItem(hwndCurrentSettings, IDC_AUTORECONNECT_TIMEOUT), UDM_GETPOS32, 0, (LPARAM)&bError);
+                if(bError)
+                    App->reconnectTimeout = 5;
+
+                AppConfig->SetInt(TEXT("Publish"), TEXT("AutoReconnect"), App->bAutoReconnect);
+                AppConfig->SetInt(TEXT("Publish"), TEXT("AutoReconnectTimeout"), App->reconnectTimeout);
+
+                //------------------------------------------
+
+                String strSavePath = GetEditText(GetDlgItem(hwndCurrentSettings, IDC_SAVEPATH));
+                BOOL bSaveToFile = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_SAVETOFILE), BM_GETCHECK, 0, 0) != BST_UNCHECKED;
+
+                if(!strSavePath.IsValid())
+                    bSaveToFile = FALSE;
+
+                AppConfig->SetInt   (TEXT("Publish"), TEXT("SaveToFile"), bSaveToFile);
+                AppConfig->SetString(TEXT("Publish"), TEXT("SavePath"),   strSavePath);
+
                 break;
             }
 
@@ -1275,11 +1670,66 @@ void OBS::ApplySettings()
                     EnableWindow(GetDlgItem(hwndMain, ID_MICVOLUME), FALSE);
                 else
                     EnableWindow(GetDlgItem(hwndMain, ID_MICVOLUME), TRUE);
+
+                //------------------------------------
+
+                bUsingPushToTalk = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_PUSHTOTALK), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                DWORD hotkey = (DWORD)SendMessage(GetDlgItem(hwndCurrentSettings, IDC_PUSHTOTALKHOTKEY), HKM_GETHOTKEY, 0, 0);
+
+                AppConfig->SetInt(TEXT("Audio"), TEXT("UsePushToTalk"), bUsingPushToTalk);
+                AppConfig->SetInt(TEXT("Audio"), TEXT("PushToTalkHotkey"), hotkey);
+
+                if(App->pushToTalkHotkeyID)
+                    API->DeleteHotkey(App->pushToTalkHotkeyID);
+
+                if(App->bUsingPushToTalk && hotkey)
+                    pushToTalkHotkeyID = API->CreateHotkey(hotkey, OBS::PushToTalkHotkey, NULL);
+
+                //------------------------------------
+
+                hotkey = (DWORD)SendMessage(GetDlgItem(hwndCurrentSettings, IDC_MUTEMICHOTKEY), HKM_GETHOTKEY, 0, 0);
+                AppConfig->SetInt(TEXT("Audio"), TEXT("MuteMicHotkey"), hotkey);
+
+                if(App->muteMicHotkeyID)
+                    API->DeleteHotkey(App->muteMicHotkeyID);
+
+                if(hotkey)
+                    muteMicHotkeyID = API->CreateHotkey(hotkey, OBS::MuteMicHotkey, NULL);
+
+                //------------------------------------
+
+                hotkey = (DWORD)SendMessage(GetDlgItem(hwndCurrentSettings, IDC_MUTEDESKTOPHOTKEY), HKM_GETHOTKEY, 0, 0);
+                AppConfig->SetInt(TEXT("Audio"), TEXT("MuteDesktopHotkey"), hotkey);
+
+                if(App->muteDesktopHotkeyID)
+                    API->DeleteHotkey(App->muteDesktopHotkeyID);
+
+                if(hotkey)
+                    muteDesktopHotkeyID = API->CreateHotkey(hotkey, OBS::MuteDesktopHotkey, NULL);
+
                 break;
             }
 
-        case Settings_Hotkeys:
+        case Settings_Advanced:
             {
+                BOOL bUseCustomX264Settings = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_USEVIDEOENCODERSETTINGS), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                String strCustomX264Settings = GetEditText(GetDlgItem(hwndCurrentSettings, IDC_VIDEOENCODERSETTINGS));
+
+                AppConfig->SetInt   (TEXT("Video Encoding"), TEXT("UseCustomSettings"), bUseCustomX264Settings);
+                AppConfig->SetString(TEXT("Video Encoding"), TEXT("CustomSettings"),    strCustomX264Settings);
+
+                //--------------------------------------------------
+
+                BOOL bUseVideoSyncFix = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_USESYNCFIX), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                AppConfig->SetInt   (TEXT("Video Encoding"), TEXT("UseSyncFix"),        bUseVideoSyncFix);
+
+                //--------------------------------------------------
+
+                BOOL bUseSendBuffer = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_USESENDBUFFER), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                String strSendBufferSize = GetCBText(GetDlgItem(hwndCurrentSettings, IDC_SENDBUFFERSIZE));
+
+                AppConfig->SetInt   (TEXT("Publish"),        TEXT("UseSendBuffer"),     bUseSendBuffer);
+                AppConfig->SetString(TEXT("Publish"),        TEXT("SendBufferSize"),    strSendBufferSize);
                 break;
             }
     }
@@ -1304,7 +1754,7 @@ INT_PTR CALLBACK OBS::SettingsDialogProc(HWND hwnd, UINT message, WPARAM wParam,
                 SendMessage(GetDlgItem(hwnd, IDC_SETTINGSLIST), LB_ADDSTRING, 0, (LPARAM)Str("Settings.Publish"));
                 SendMessage(GetDlgItem(hwnd, IDC_SETTINGSLIST), LB_ADDSTRING, 0, (LPARAM)Str("Settings.Video"));
                 SendMessage(GetDlgItem(hwnd, IDC_SETTINGSLIST), LB_ADDSTRING, 0, (LPARAM)Str("Settings.Audio"));
-                //SendMessage(GetDlgItem(hwnd, IDC_SETTINGSLIST), LB_ADDSTRING, 0, (LPARAM)Str("Settings.Hotkeys"));
+                SendMessage(GetDlgItem(hwnd, IDC_SETTINGSLIST), LB_ADDSTRING, 0, (LPARAM)Str("Settings.Advanced"));
 
                 RECT subDialogRect;
                 GetWindowRect(GetDlgItem(hwnd, IDC_SUBDIALOG), &subDialogRect);
@@ -1370,7 +1820,8 @@ INT_PTR CALLBACK OBS::SettingsDialogProc(HWND hwnd, UINT message, WPARAM wParam,
                             case Settings_Audio:
                                 App->hwndCurrentSettings = CreateDialog(hinstMain, MAKEINTRESOURCE(IDD_SETTINGS_AUDIO), hwnd, (DLGPROC)OBS::AudioSettingsProc);
                                 break;
-                            case Settings_Hotkeys:
+                            case Settings_Advanced:
+                                App->hwndCurrentSettings = CreateDialog(hinstMain, MAKEINTRESOURCE(IDD_SETTINGS_ADVANCED), hwnd, (DLGPROC)OBS::AdvancedSettingsProc);
                                 break;
                         }
 

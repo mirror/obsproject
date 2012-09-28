@@ -18,6 +18,7 @@
 
 
 #include "Main.h"
+#include <shellapi.h>
 
 
 //hello, you've come into the file I hate the most.
@@ -44,12 +45,6 @@ enum
     ID_LISTBOX_ADD,
 
     ID_LISTBOX_GLOBALSOURCE=5000,
-};
-
-struct SceneHotkeyInfo
-{
-    DWORD hotkey;
-    XElement *scene;
 };
 
 INT_PTR CALLBACK OBS::EnterSourceNameDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -380,7 +375,7 @@ LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM
                     {
                         DWORD hotkey = item->GetInt(TEXT("hotkey"));
                         if(hotkey)
-                            API->DeleteHotkey(hotkey);
+                            App->RemoveSceneHotkey(hotkey);
 
                         SendMessage(hwnd, LB_DELETESTRING, curSel, 0);
                         if(--numItems)
@@ -420,6 +415,7 @@ LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM
                 case ID_LISTBOX_HOTKEY:
                     {
                         DWORD prevHotkey = item->GetInt(TEXT("hotkey"));
+
                         SceneHotkeyInfo hotkeyInfo;
                         hotkeyInfo.hotkey = prevHotkey;
                         hotkeyInfo.scene = item;
@@ -427,15 +423,15 @@ LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM
                         if(DialogBoxParam(hinstMain, MAKEINTRESOURCE(IDD_SCENEHOTKEY), hwndMain, OBS::SceneHotkeyDialogProc, (LPARAM)&hotkeyInfo) == IDOK)
                         {
                             if(hotkeyInfo.hotkey)
-                            {
-                                if(!API->CreateHotkey(hotkeyInfo.hotkey, SceneHotkey, 0))
-                                    hotkeyInfo.hotkey = 0;
-                            }
+                                hotkeyInfo.hotkeyID = API->CreateHotkey(hotkeyInfo.hotkey, SceneHotkey, 0);
 
                             item->SetInt(TEXT("hotkey"), hotkeyInfo.hotkey);
 
                             if(prevHotkey)
-                                API->DeleteHotkey(prevHotkey);
+                                App->RemoveSceneHotkey(prevHotkey);
+
+                            if(hotkeyInfo.hotkeyID)
+                                App->sceneHotkeys << hotkeyInfo;
                         }
                         break;
                     }
@@ -1339,6 +1335,93 @@ INT_PTR CALLBACK OBS::GlobalSourcesProc(HWND hwnd, UINT message, WPARAM wParam, 
 
 //----------------------------
 
+struct ReconnectInfo
+{
+    UINT_PTR timerID;
+    UINT secondsLeft;
+};
+
+INT_PTR CALLBACK OBS::ReconnectDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    switch(message)
+    {
+        case WM_INITDIALOG:
+            {
+                LocalizeWindow(hwnd);
+
+                ReconnectInfo *ri = new ReconnectInfo;
+                ri->secondsLeft = App->reconnectTimeout;
+                ri->timerID = 1;
+
+                if(!SetTimer(hwnd, 1, 1000, NULL))
+                {
+                    App->bReconnecting = false;
+                    EndDialog(hwnd, IDCANCEL);
+                    delete ri;
+                }
+
+                String strText;
+                if(App->bReconnecting)
+                    strText << Str("Reconnecting.Retrying") << UIntString(ri->secondsLeft);
+                else
+                    strText << Str("Reconnecting") << UIntString(ri->secondsLeft);
+
+                SetWindowText(GetDlgItem(hwnd, IDC_RECONNECTING), strText);
+
+                SetWindowLongPtr(hwnd, DWLP_USER, (LONG_PTR)ri);
+                return TRUE;
+            }
+
+        case WM_TIMER:
+            {
+                ReconnectInfo *ri = (ReconnectInfo*)GetWindowLongPtr(hwnd, DWLP_USER);
+                if(wParam != 1)
+                    break;
+
+                if(!--ri->secondsLeft)
+                {
+                    SendMessage(hwndMain, OBS_RECONNECT, 0, 0);
+                    EndDialog(hwnd, IDOK);
+                }
+                else
+                {
+                    String strText;
+                    if(App->bReconnecting)
+                        strText << Str("Reconnecting.Retrying") << UIntString(ri->secondsLeft);
+                    else
+                        strText << Str("Reconnecting") << UIntString(ri->secondsLeft);
+
+                    SetWindowText(GetDlgItem(hwnd, IDC_RECONNECTING), strText);
+                }
+                break;
+            }
+
+        case WM_COMMAND:
+            if(LOWORD(wParam) == IDCANCEL)
+            {
+                App->bReconnecting = false;
+                EndDialog(hwnd, IDCANCEL);
+            }
+            break;
+
+        case WM_CLOSE:
+            App->bReconnecting = false;
+            EndDialog(hwnd, IDCANCEL);
+            break;
+
+        case WM_DESTROY:
+            {
+                ReconnectInfo *ri = (ReconnectInfo*)GetWindowLongPtr(hwnd, DWLP_USER);
+                KillTimer(hwnd, ri->timerID);
+                delete ri;
+            }
+    }
+
+    return FALSE;
+}
+
+//----------------------------
+
 LRESULT CALLBACK OBS::OBSProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     traceIn(OBS::OBSProc);
@@ -1348,6 +1431,7 @@ LRESULT CALLBACK OBS::OBSProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
         case WM_COMMAND:
             switch(LOWORD(wParam))
             {
+                case ID_SETTINGS_SETTINGS:
                 case ID_SETTINGS:
                     DialogBox(hinstMain, MAKEINTRESOURCE(IDD_SETTINGS), hwnd, (DLGPROC)OBS::SettingsDialogProc);
                     break;
@@ -1356,8 +1440,37 @@ LRESULT CALLBACK OBS::OBSProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
                     DialogBox(hinstMain, MAKEINTRESOURCE(IDD_GLOBAL_SOURCES), hwnd, (DLGPROC)OBS::GlobalSourcesProc);
                     break;
 
+                case ID_FILE_EXIT:
                 case ID_EXIT:
                     PostQuitMessage(0);
+                    break;
+
+                case ID_HELP_CONTENTS:
+                    {
+                        String strHelpPath;
+                        UINT dirSize = GetCurrentDirectory(0, 0);
+                        strHelpPath.SetLength(dirSize);
+                        GetCurrentDirectory(dirSize, strHelpPath.Array());
+
+                        strHelpPath << TEXT("\\OBSHelp.chm");
+
+                        ShellExecute(NULL, TEXT("open"), strHelpPath, 0, 0, SW_SHOWNORMAL);
+                    }
+                    break;
+
+                case ID_SETTINGS_OPENCONFIGFOLDER:
+                    {
+                        String strAppPath = API->GetAppDataPath();
+                        ShellExecute(NULL, TEXT("open"), strAppPath, 0, 0, SW_SHOWNORMAL);
+                    }
+                    break;
+
+                case ID_SETTINGS_OPENLOGFOLDER:
+                    {
+                        String strAppPath = API->GetAppDataPath();
+                        strAppPath << TEXT("\\logs");
+                        ShellExecute(NULL, TEXT("open"), strAppPath, 0, 0, SW_SHOWNORMAL);
+                    }
                     break;
 
                 case ID_PLUGINS:
@@ -1527,11 +1640,22 @@ LRESULT CALLBACK OBS::OBSProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
 
         case OBS_REQUESTSTOP:
             App->Stop();
-            MessageBox(hwnd, Str("Connection.Disconnected"), NULL, 0);
+            if(!App->bAutoReconnect)
+                MessageBox(hwnd, Str("Connection.Disconnected"), NULL, 0);
+            else
+            {
+                App->bReconnecting = false;
+                DialogBox(hinstMain, MAKEINTRESOURCE(IDD_RECONNECTING), hwnd, OBS::ReconnectDialogProc);
+            }
             break;
 
         case OBS_CALLHOTKEY:
             App->CallHotkey((DWORD)lParam, wParam != 0);
+            break;
+
+        case OBS_RECONNECT:
+            App->bReconnecting = true;
+            App->Start();
             break;
 
         case WM_CLOSE:

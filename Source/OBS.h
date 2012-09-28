@@ -24,7 +24,7 @@ class Scene;
 #define NUM_RENDER_BUFFERS 2
 
 static const int minClientWidth  = 700;
-static const int minClientHeight = 400;
+static const int minClientHeight = 200;
 
 
 struct AudioDeviceInfo
@@ -98,6 +98,15 @@ public:
 
 //-------------------------------------------------------------------
 
+class VideoFileStream
+{
+public:
+    virtual ~VideoFileStream() {}
+    virtual void AddPacket(BYTE *data, UINT size, DWORD timestamp, PacketType type)=0;
+};
+
+//-------------------------------------------------------------------
+
 enum
 {
     NoAudioAvailable,
@@ -146,12 +155,14 @@ class VideoEncoder
 
 protected:
     virtual bool Encode(LPVOID picIn, List<DataPacket> &packets, List<PacketType> &packetTypes, DWORD timestamp)=0;
-    virtual void GetHeaders(DataPacket &packet)=0;
 
 public:
     virtual ~VideoEncoder() {}
 
     virtual int  GetBitRate() const=0;
+
+    virtual void GetHeaders(DataPacket &packet)=0;
+    virtual void GetSEI(DataPacket &packet)=0;
 
     virtual String GetInfoString() const=0;
 };
@@ -250,6 +261,7 @@ enum
 
 #define OBS_REQUESTSTOP WM_USER+1
 #define OBS_CALLHOTKEY  WM_USER+2
+#define OBS_RECONNECT   WM_USER+3
 
 //----------------------------
 
@@ -265,6 +277,15 @@ enum ItemModifyType
     ItemModifyType_ScaleRight,
     ItemModifyType_ScaleBottomRight,
     ItemModifyType_ScaleBottom,
+};
+
+//----------------------------
+
+struct SceneHotkeyInfo
+{
+    DWORD hotkeyID;
+    DWORD hotkey;
+    XElement *scene;
 };
 
 //----------------------------
@@ -307,13 +328,27 @@ class OBS
 
     //---------------------------------------------------
     // video
-    Scene               *scene;
-    VideoEncoder        *videoEncoder;
-    HDC                 hCaptureDC;
-    List<MonitorInfo>   monitors;
+    Scene                   *scene;
+    VideoEncoder            *videoEncoder;
+    HDC                     hCaptureDC;
+    List<MonitorInfo>       monitors;
 
-    XConfig             scenesConfig;
-    XElement            *sceneElement;
+    XConfig                 scenesConfig;
+    List<SceneHotkeyInfo>   sceneHotkeys;
+    XElement                *sceneElement;
+
+    inline void RemoveSceneHotkey(DWORD hotkey)
+    {
+        for(UINT i=0; i<sceneHotkeys.Num(); i++)
+        {
+            if(sceneHotkeys[i].hotkey == hotkey)
+            {
+                API->DeleteHotkey(sceneHotkeys[i].hotkeyID);
+                sceneHotkeys.Remove(i);
+                break;
+            }
+        }
+    }
 
     void SelectSources();
 
@@ -338,7 +373,7 @@ class OBS
     static INT_PTR CALLBACK PublishSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static INT_PTR CALLBACK VideoSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static INT_PTR CALLBACK AudioSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
-    static INT_PTR CALLBACK HotkeysSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+    static INT_PTR CALLBACK AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
     //---------------------------------------------------
 
@@ -350,6 +385,11 @@ class OBS
     int     clientWidth, clientHeight;
     bool    bSizeChanging;
     bool    bResizeRenderView;
+
+    bool    bAutoReconnect;
+    bool    bRetrying;
+    bool    bReconnecting;
+    UINT    reconnectTimeout;
 
     bool    bEditMode;
     bool    bRenderViewEnabled;
@@ -383,6 +423,14 @@ class OBS
     HANDLE  hSoundThread, hSoundDataMutex, hRequestAudioEvent;
     float   desktopVol, micVol;
     List<FrameAudio> pendingAudioFrames;
+
+    bool bUsingPushToTalk, bPushToTalkOn;
+    UINT pushToTalkHotkeyID;
+    UINT muteMicHotkeyID;
+    UINT muteDesktopHotkeyID;
+
+    bool bWriteToFile;
+    VideoFileStream *fileStream;
 
     String  streamReport;
 
@@ -451,10 +499,15 @@ class OBS
     void MainAudioLoop();
     static DWORD STDCALL MainAudioThread(LPVOID lpUnused);
 
+    static void STDCALL PushToTalkHotkey(DWORD hotkey, UPARAM param, bool bDown);
+    static void STDCALL MuteMicHotkey(DWORD hotkey, UPARAM param, bool bDown);
+    static void STDCALL MuteDesktopHotkey(DWORD hotkey, UPARAM param, bool bDown);
+
     static INT_PTR CALLBACK EnterGlobalSourceNameDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static INT_PTR CALLBACK EnterSourceNameDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static INT_PTR CALLBACK EnterSceneNameDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static INT_PTR CALLBACK SceneHotkeyDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+    static INT_PTR CALLBACK ReconnectDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK RenderFrameProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static LRESULT CALLBACK OBSProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -465,8 +518,6 @@ class OBS
     void ResizeWindow(bool bRedrawRenderFrame);
 
     void ToggleCapturing();
-
-    char* EncMetaData(char *enc, char *pend);
 
     Scene* CreateScene(CTSTR lpClassName, XElement *data);
     void ConfigureScene(XElement *element);
@@ -486,11 +537,17 @@ public:
     OBS();
     ~OBS();
 
+    char* EncMetaData(char *enc, char *pend);
+
     inline void PostStopMessage() {if(hwndMain) PostMessage(hwndMain, OBS_REQUESTSTOP, 0, 0);}
 
     inline Vect2 GetBaseSize()        const {return Vect2(float(baseCX), float(baseCY));}
     inline Vect2 GetOutputSize()      const {return Vect2(float(outputCX), float(outputCY));}
     inline Vect2 GetRenderFrameSize() const {return Vect2(float(renderFrameWidth), float(renderFrameHeight));}
+
+    inline void GetBaseSize(UINT &width, UINT &height) const           {width = baseCX;           height = baseCY;}
+    inline void GetRenderFrameSize(UINT &width, UINT &height) const    {width = renderFrameWidth; height = renderFrameHeight;}
+    inline void GetOutputSize(UINT &width, UINT &height) const         {width = outputCX;         height = outputCY;}
 
     inline bool SSE2Available() const {return bSSE2Available;}
 

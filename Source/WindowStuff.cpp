@@ -37,6 +37,7 @@ enum
     ID_LISTBOX_MOVETOTOP,
     ID_LISTBOX_MOVETOBOTTOM,
     ID_LISTBOX_CENTER,
+    ID_LISTBOX_FITTOSCREEN,
     ID_LISTBOX_RESETSIZE,
     ID_LISTBOX_RENAME,
     ID_LISTBOX_HOTKEY,
@@ -52,11 +53,16 @@ INT_PTR CALLBACK OBS::EnterSourceNameDialogProc(HWND hwnd, UINT message, WPARAM 
     switch(message)
     {
         case WM_INITDIALOG:
-            SetWindowLongPtr(hwnd, DWLP_USER, (LONG_PTR)lParam);
-            LocalizeWindow(hwnd);
+            {
+                SetWindowLongPtr(hwnd, DWLP_USER, (LONG_PTR)lParam);
+                LocalizeWindow(hwnd);
 
-            //SetFocus(GetDlgItem(hwnd, IDC_NAME));
-            return TRUE;
+                String &strOut = *(String*)GetWindowLongPtr(hwnd, DWLP_USER);
+                SetWindowText(GetDlgItem(hwnd, IDC_NAME), strOut);
+
+                //SetFocus(GetDlgItem(hwnd, IDC_NAME));
+                return TRUE;
+            }
 
         case WM_COMMAND:
             switch(LOWORD(wParam))
@@ -168,11 +174,15 @@ INT_PTR CALLBACK OBS::EnterSceneNameDialogProc(HWND hwnd, UINT message, WPARAM w
     switch(message)
     {
         case WM_INITDIALOG:
-            SetWindowLongPtr(hwnd, DWLP_USER, (LONG_PTR)lParam);
-            LocalizeWindow(hwnd);
+            {
+                SetWindowLongPtr(hwnd, DWLP_USER, (LONG_PTR)lParam);
+                LocalizeWindow(hwnd);
 
-            //SetFocus(GetDlgItem(hwnd, IDC_NAME));
-            return TRUE;
+                String &strOut = *(String*)GetWindowLongPtr(hwnd, DWLP_USER);
+                SetWindowText(GetDlgItem(hwnd, IDC_NAME), strOut);
+
+                return TRUE;
+            }
 
         case WM_COMMAND:
             switch(LOWORD(wParam))
@@ -208,6 +218,40 @@ INT_PTR CALLBACK OBS::EnterSceneNameDialogProc(HWND hwnd, UINT message, WPARAM w
             }
     }
     return 0;
+}
+
+void OBS::GetNewSceneName(String &strScene)
+{
+    XElement *scenes = App->scenesConfig.GetElement(TEXT("scenes"));
+    if(scenes)
+    {
+        String strTestName = strScene;
+
+        UINT num = 1;
+        while(scenes->GetElement(strTestName) != NULL)
+            strTestName.Clear() << strScene << FormattedString(TEXT(" %u"), ++num);
+
+        strScene = strTestName;
+    }
+}
+
+void OBS::GetNewSourceName(String &strSource)
+{
+    XElement *sceneElement = API->GetSceneElement();
+    if(sceneElement)
+    {
+        XElement *sources = sceneElement->GetElement(TEXT("sources"));
+        if(!sources)
+            sources = sceneElement->CreateElement(TEXT("sources"));
+
+        String strTestName = strSource;
+
+        UINT num = 1;
+        while(sources->GetElement(strTestName) != NULL)
+            strTestName.Clear() << strSource << FormattedString(TEXT(" %u"), ++num);
+
+        strSource = strTestName;
+    }
 }
 
 LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -264,13 +308,14 @@ LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM
 
         if(numItems && bSelected)
         {
-            String strRemove       = Str("Listbox.Remove");
-            String strRename       = Str("Listbox.Rename");
-            String strMoveUp       = Str("Listbox.MoveUp");
-            String strMoveDown     = Str("Listbox.MoveDown");
-            String strMoveTop      = Str("Listbox.MoveToTop");
-            String strMoveToBottom = Str("Listbox.MoveToBottom");
+            String strRemove       = Str("Remove");
+            String strRename       = Str("Rename");
+            String strMoveUp       = Str("MoveUp");
+            String strMoveDown     = Str("MoveDown");
+            String strMoveTop      = Str("MoveToTop");
+            String strMoveToBottom = Str("MoveToBottom");
             String strCenter       = Str("Listbox.Center");
+            String strFitToScreen  = Str("Listbox.FitToScreen");
             String strResize       = Str("Listbox.ResetSize");
 
             if(id == ID_SOURCES)
@@ -281,6 +326,7 @@ LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM
                 strMoveTop      << TEXT("\tCtrl-Home");
                 strMoveToBottom << TEXT("\tCtrl-End");
                 strCenter       << TEXT("\tCtrl-C");
+                strFitToScreen  << TEXT("\tCtrl-F");
                 strResize       << TEXT("\tCtrl-R");
             }
 
@@ -310,6 +356,7 @@ LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM
             {
                 AppendMenu(hMenu, MF_SEPARATOR, 0, 0);
                 AppendMenu(hMenu, MF_STRING, ID_LISTBOX_CENTER,         strCenter);
+                AppendMenu(hMenu, MF_STRING, ID_LISTBOX_FITTOSCREEN,    strFitToScreen);
                 AppendMenu(hMenu, MF_STRING, ID_LISTBOX_RESETSIZE,      strResize);
             }
         }
@@ -344,7 +391,9 @@ LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM
                 default:
                     if(ret >= ID_LISTBOX_ADD)
                     {
-                        String strName;
+                        String strName = TEXT("Scene");
+                        GetNewSceneName(strName);
+
                         if(DialogBoxParam(hinstMain, MAKEINTRESOURCE(IDD_ENTERNAME), hwndMain, OBS::EnterSceneNameDialogProc, (LPARAM)&strName) == IDOK)
                         {
                             UINT classID = ret-ID_LISTBOX_ADD;
@@ -545,18 +594,29 @@ LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM
                 default:
                     if(ret >= ID_LISTBOX_ADD)
                     {
+                        ClassInfo *ci;
+                        if(ret >= ID_LISTBOX_GLOBALSOURCE)
+                            ci = App->GetImageSourceClass(TEXT("GlobalSource"));
+                        else
+                        {
+                            UINT classID = ret-ID_LISTBOX_ADD;
+                            ci = App->imageSourceClasses+classID;
+                        }
+
                         String strName;
+                        if(ret >= ID_LISTBOX_GLOBALSOURCE)
+                        {
+                            List<CTSTR> sourceNames;
+                            App->GetGlobalSourceNames(sourceNames);
+                            strName = sourceNames[ret-ID_LISTBOX_GLOBALSOURCE];
+                        }
+                        else
+                            strName = ci->strName;
+
+                        GetNewSourceName(strName);
+
                         if(DialogBoxParam(hinstMain, MAKEINTRESOURCE(IDD_ENTERNAME), hwndMain, OBS::EnterSourceNameDialogProc, (LPARAM)&strName) == IDOK)
                         {
-                            ClassInfo *ci;
-                            if(ret >= ID_LISTBOX_GLOBALSOURCE)
-                                ci = App->GetImageSourceClass(TEXT("GlobalSource"));
-                            else
-                            {
-                                UINT classID = ret-ID_LISTBOX_ADD;
-                                ci = App->imageSourceClasses+classID;
-                            }
-
                             XElement *sources = App->sceneElement->GetElement(TEXT("sources"));
                             if(!sources)
                                 sources = App->sceneElement->CreateElement(TEXT("sources"));
@@ -652,6 +712,10 @@ LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM
 
                 case ID_LISTBOX_CENTER:
                     App->CenterItems();
+                    break;
+
+                case ID_LISTBOX_FITTOSCREEN:
+                    App->FitItemsToScreen();
                     break;
 
                 case ID_LISTBOX_RESETSIZE:
@@ -921,6 +985,60 @@ void OBS::CenterItems()
     }
 }
 
+extern "C" double round(double val);
+
+void OBS::FitItemsToScreen()
+{
+    if(App->bRunning)
+    {
+        List<SceneItem*> selectedItems;
+        App->scene->GetSelectedItems(selectedItems);
+
+        Vect2 baseSize = App->GetBaseSize();
+        double baseAspect = double(baseSize.x)/double(baseSize.y);
+
+        for(UINT i=0; i<selectedItems.Num(); i++)
+        {
+            SceneItem *item = selectedItems[i];
+            item->pos = (baseSize*0.5f)-(item->size*0.5f);
+
+            if(item->source)
+            {
+                Vect2 itemSize = item->source->GetSize();
+
+                Vect2 pos = Vect2(0.0f, 0.0f);
+                Vect2 size = baseSize;
+
+                double sourceAspect = double(itemSize.x)/double(itemSize.y);
+                if(!CloseDouble(baseAspect, sourceAspect))
+                {
+                    if(baseAspect < sourceAspect)
+                        size.y = float(double(size.x) / sourceAspect);
+                    else
+                        size.x = float(double(size.y) * sourceAspect);
+
+                    pos = (baseSize-size)*0.5f;
+
+                    pos.x = (float)round(pos.x);
+                    pos.y = (float)round(pos.y);
+
+                    size.x = (float)round(size.x);
+                    size.y = (float)round(size.y);
+                }
+
+                item->pos  = pos;
+                item->size = size;
+
+                XElement *itemElement = item->GetElement();
+                itemElement->SetInt(TEXT("x"),  int(pos.x));
+                itemElement->SetInt(TEXT("y"),  int(pos.y));
+                itemElement->SetInt(TEXT("cx"), int(size.x));
+                itemElement->SetInt(TEXT("cy"), int(size.y));
+            }
+        }
+    }
+}
+
 void OBS::ResetItemSizes()
 {
     if(App->bRunning)
@@ -932,11 +1050,13 @@ void OBS::ResetItemSizes()
         {
             SceneItem *item = selectedItems[i];
             if(item->source)
+            {
                 item->size = item->source->GetSize();
 
-            XElement *itemElement = item->GetElement();
-            itemElement->SetInt(TEXT("cx"), int(item->size.x));
-            itemElement->SetInt(TEXT("cy"), int(item->size.y));
+                XElement *itemElement = item->GetElement();
+                itemElement->SetInt(TEXT("cx"), int(item->size.x));
+                itemElement->SetInt(TEXT("cy"), int(item->size.y));
+            }
         }
     }
 }
@@ -1549,6 +1669,10 @@ LRESULT CALLBACK OBS::OBSProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
                     App->CenterItems();
                     break;
 
+                case IDA_SOURCE_FITTOSCREEN:
+                    App->FitItemsToScreen();
+                    break;
+
                 case IDA_SOURCE_RESETSIZE:
                     App->ResetItemSizes();
                     break;
@@ -1657,6 +1781,14 @@ LRESULT CALLBACK OBS::OBSProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
             App->bReconnecting = true;
             App->Start();
             break;
+
+        case OBS_SETSCENE:
+            {
+                TSTR lpScene = (TSTR)lParam;
+                App->SetScene(lpScene);
+                Free(lpScene);
+                break;
+            }
 
         case WM_CLOSE:
             PostQuitMessage(0);
@@ -2234,7 +2366,7 @@ LRESULT CALLBACK OBS::RenderFrameProc(HWND hwnd, UINT message, WPARAM wParam, LP
 
 typedef CTSTR (*GETPLUGINNAMEPROC)();
 typedef CTSTR (*GETPLUGINDESCRIPTIONPROC)();
-typedef void (*CONFIGUREPLUGINPROC)();
+typedef void (*CONFIGUREPLUGINPROC)(HWND);
 
 
 
@@ -2315,7 +2447,7 @@ INT_PTR CALLBACK OBS::PluginsDialogProc(HWND hwnd, UINT message, WPARAM wParam, 
                         //-------------------------------------
 
                         CONFIGUREPLUGINPROC configPlugin = (CONFIGUREPLUGINPROC)GetProcAddress(pluginInfo.hModule, "ConfigPlugin");
-                        configPlugin();
+                        configPlugin(hwnd);
                     }
                     break;
 

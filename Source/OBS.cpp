@@ -42,6 +42,9 @@ bool STDCALL ConfigureDesktopSource(XElement *data, bool bCreating);
 ImageSource* STDCALL CreateBitmapSource(XElement *data);
 bool STDCALL ConfigureBitmapSource(XElement *element, bool bCreating);
 
+ImageSource* STDCALL CreateBitmapTransitionSource(XElement *data);
+bool STDCALL ConfigureBitmapTransitionSource(XElement *element, bool bCreating);
+
 ImageSource* STDCALL CreateGlobalSource(XElement *data);
 
 //NetworkStream* CreateRTMPServer();
@@ -63,11 +66,6 @@ void Convert444to420(LPBYTE input, int width, int height, LPBYTE *output, bool b
 
 void STDCALL SceneHotkey(DWORD hotkey, UPARAM param, bool bDown);
 
-
-inline BOOL CloseDouble(double f1, double f2, double precision=0.001)
-{
-    return fabs(f1-f2) <= precision;
-}
 
 
 //----------------------------
@@ -296,7 +294,7 @@ struct HotkeyInfo
     DWORD hotkey;
     OBSHOTKEYPROC hotkeyProc;
     UPARAM param;
-    bool bDown;
+    bool bModifiersDown, bHotkeyDown, bDownSent;
 };
 
 class OBSAPIInterface : public APIInterface
@@ -332,7 +330,21 @@ public:
     virtual XElement* GetSceneListElement()         {return App->scenesConfig.GetElement(TEXT("scenes"));}
     virtual XElement* GetGlobalSourceListElement()  {return App->scenesConfig.GetElement(TEXT("global sources"));}
 
-    virtual bool SetScene(CTSTR lpScene)        {return App->SetScene(lpScene);}
+    virtual bool SetScene(CTSTR lpScene, bool bPost)
+    {
+        assert(lpScene && *lpScene);
+
+        if(!lpScene || !*lpScene)
+            return false;
+
+        if(bPost)
+        {
+            SendMessage(hwndMain, OBS_SETSCENE, 0, (LPARAM)sdup(lpScene));
+            return true;
+        }
+
+        return App->SetScene(lpScene);
+    }
     virtual Scene* GetScene() const             {return App->scene;}
 
     virtual CTSTR GetSceneName() const          {return App->GetSceneElement()->GetName();}
@@ -387,6 +399,7 @@ OBS::OBS()
     if(!InitCommonControlsEx(&ecce))
         CrashError(TEXT("Could not initalize common shell controls"));
 
+    InitHotkeyExControl(hinstMain);
     InitVolumeControl();
     InitBandwidthMeter();
 
@@ -412,6 +425,7 @@ OBS::OBS()
     RegisterSceneClass(TEXT("Scene"), Str("Scene"), (OBSCREATEPROC)CreateNormalScene, NULL);
     RegisterImageSourceClass(TEXT("DesktopImageSource"), Str("Sources.SoftwareCaptureSource"), (OBSCREATEPROC)CreateDesktopSource, (OBSCONFIGPROC)ConfigureDesktopSource);
     RegisterImageSourceClass(TEXT("BitmapImageSource"), Str("Sources.BitmapSource"), (OBSCREATEPROC)CreateBitmapSource, (OBSCONFIGPROC)ConfigureBitmapSource);
+    RegisterImageSourceClass(TEXT("BitmapTransitionSource"), Str("Sources.TransitionSource"), (OBSCREATEPROC)CreateBitmapTransitionSource, (OBSCONFIGPROC)ConfigureBitmapTransitionSource);
     RegisterImageSourceClass(TEXT("GlobalSource"), Str("Sources.GlobalSource"), (OBSCREATEPROC)CreateGlobalSource, (OBSCONFIGPROC)OBS::ConfigGlobalSource);
 
     //-----------------------------------------------------
@@ -718,6 +732,10 @@ OBS::OBS()
     if(hotkey)
         muteDesktopHotkeyID = API->CreateHotkey(hotkey, OBS::MuteDesktopHotkey, NULL);
 
+    hotkey = AppConfig->GetInt(TEXT("Publish"), TEXT("StopStreamHotkey"));
+    if(hotkey)
+        stopStreamHotkeyID = API->CreateHotkey(hotkey, OBS::StopStreamHotkey, NULL);
+
     //-----------------------------------------------------
     // load plugins
 
@@ -736,7 +754,7 @@ OBS::OBS()
                 if(hPlugin)
                 {
                     LOADPLUGINPROC loadPlugin = (LOADPLUGINPROC)GetProcAddress(hPlugin, "LoadPlugin");
-                    if(!loadPlugin || loadPlugin())
+                    if(loadPlugin && loadPlugin())
                     {
                         PluginInfo *pluginInfo = plugins.CreateNew();
                         pluginInfo->hModule = hPlugin;
@@ -850,10 +868,17 @@ void STDCALL SceneHotkey(DWORD hotkey, UPARAM param, bool bDown)
     }
 }
 
+void STDCALL OBS::StopStreamHotkey(DWORD hotkey, UPARAM param, bool bDown)
+{
+    if(!bDown) return;
+    App->Stop();
+}
+
 void STDCALL OBS::PushToTalkHotkey(DWORD hotkey, UPARAM param, bool bDown)
 {
     App->bPushToTalkOn = bDown;
 }
+
 
 void STDCALL OBS::MuteMicHotkey(DWORD hotkey, UPARAM param, bool bDown)
 {
@@ -1645,11 +1670,11 @@ void OBS::MainCaptureLoop()
             if(bTransitioning)
             {
                 BlendFunction(GS_BLEND_ONE, GS_BLEND_ZERO);
-                DrawSprite(transitionTexture, 0.0f, 0.0f, renderFrameSize.x, renderFrameSize.y);
+                DrawSprite(transitionTexture, 0xFFFFFFFF, 0.0f, 0.0f, renderFrameSize.x, renderFrameSize.y);
                 BlendFunction(GS_BLEND_FACTOR, GS_BLEND_INVFACTOR, transitionAlpha);
             }
 
-            DrawSprite(mainRenderTextures[curRenderTarget], 0.0f, 0.0f, renderFrameSize.x, renderFrameSize.y);
+            DrawSprite(mainRenderTextures[curRenderTarget], 0xFFFFFFFF, 0.0f, 0.0f, renderFrameSize.x, renderFrameSize.y);
 
             Ortho(0.0f, renderFrameSize.x, renderFrameSize.y, 0.0f, -100.0f, 100.0f);
 
@@ -1719,11 +1744,11 @@ void OBS::MainCaptureLoop()
         if(bTransitioning)
         {
             BlendFunction(GS_BLEND_ONE, GS_BLEND_ZERO);
-            DrawSpriteEx(transitionTexture, 0.0f, 0.0f, scaleSize.x, scaleSize.y, 0.0f, 0.0f, scaleSize.x, scaleSize.y);
+            DrawSpriteEx(transitionTexture, 0xFFFFFFFF, 0.0f, 0.0f, scaleSize.x, scaleSize.y, 0.0f, 0.0f, scaleSize.x, scaleSize.y);
             BlendFunction(GS_BLEND_FACTOR, GS_BLEND_INVFACTOR, transitionAlpha);
         }
 
-        DrawSpriteEx(mainRenderTextures[curRenderTarget], 0.0f, 0.0f, outputSize.x, outputSize.y, 0.0f, 0.0f, outputSize.x, outputSize.y);
+        DrawSpriteEx(mainRenderTextures[curRenderTarget], 0xFFFFFFFF, 0.0f, 0.0f, outputSize.x, outputSize.y, 0.0f, 0.0f, outputSize.x, outputSize.y);
 
         //------------------------------------
 
@@ -2149,8 +2174,8 @@ UINT OBSAPIInterface::CreateHotkey(DWORD hotkey, OBSHOTKEYPROC hotkeyProc, UPARA
     if(!hotkey)
         return 0;
 
-    DWORD vk = LOWORD(hotkey);
-    DWORD modifier = HIWORD(hotkey);
+    DWORD vk = LOBYTE(hotkey);
+    DWORD modifier = HIBYTE(hotkey);
     DWORD fsModifiers = 0;
 
     if(modifier & HOTKEYF_ALT)
@@ -2161,12 +2186,13 @@ UINT OBSAPIInterface::CreateHotkey(DWORD hotkey, OBSHOTKEYPROC hotkeyProc, UPARA
         fsModifiers |= MOD_SHIFT;
 
     OSEnterMutex(App->hHotkeyMutex);
-    HotkeyInfo &hi  = *hotkeys.CreateNew();
-    hi.hotkeyID     = ++curHotkeyIDVal;
-    hi.hotkey       = hotkey;
-    hi.hotkeyProc   = hotkeyProc;
-    hi.param        = param;
-    hi.bDown        = false;
+    HotkeyInfo &hi      = *hotkeys.CreateNew();
+    hi.hotkeyID         = ++curHotkeyIDVal;
+    hi.hotkey           = hotkey;
+    hi.hotkeyProc       = hotkeyProc;
+    hi.param            = param;
+    hi.bModifiersDown   = false;
+    hi.bHotkeyDown      = false;
     OSLeaveMutex(App->hHotkeyMutex);
 
     return curHotkeyIDVal;
@@ -2204,8 +2230,8 @@ void OBSAPIInterface::HandleHotkeys()
     {
         HotkeyInfo &info = hotkeys[i];
 
-        DWORD hotkeyVK          = LOWORD(info.hotkey);
-        DWORD hotkeyModifiers   = HIWORD(info.hotkey);
+        DWORD hotkeyVK          = LOBYTE(info.hotkey);
+        DWORD hotkeyModifiers   = HIBYTE(info.hotkey);
 
         bool bModifiersMatch = (hotkeyModifiers == modifiers);
         if(bModifiersMatch)
@@ -2214,27 +2240,31 @@ void OBSAPIInterface::HandleHotkeys()
             bool bDown       = (keyState & 0x8000) != 0;
             bool bWasPressed = (keyState & 0x1) != 0;
 
-            if(bDown)
+            if(bDown || bWasPressed)
             {
-                if(!info.bDown)
+                if(!info.bHotkeyDown && info.bModifiersDown) //only triggers the hotkey if the actual main key was pressed second
+                {
                     PostMessage(hwndMain, OBS_CALLHOTKEY, TRUE, info.hotkeyID);
+                    info.bDownSent = true;
+                }
 
-                info.bDown = bDown;
-                continue;
-            }
-            else if(bWasPressed)
-            {
-                if(!info.bDown)
-                    PostMessage(hwndMain, OBS_CALLHOTKEY, TRUE, info.hotkeyID);
-
-                info.bDown = true;
+                info.bHotkeyDown = true;
+                if(bDown)
+                    continue;
             }
         }
 
-        if(info.bDown) //key up
+        info.bModifiersDown = bModifiersMatch;
+
+        if(info.bHotkeyDown) //key up
         {
-            PostMessage(hwndMain, OBS_CALLHOTKEY, FALSE, info.hotkeyID);
-            info.bDown = false;
+            if(info.bDownSent)
+            {
+                PostMessage(hwndMain, OBS_CALLHOTKEY, FALSE, info.hotkeyID);
+                info.bDownSent = false;
+            }
+
+            info.bHotkeyDown = false;
         }
     }
 

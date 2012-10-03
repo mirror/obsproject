@@ -17,33 +17,10 @@
 ********************************************************************************/
 
 
-uniform Texture2D diffuseTexture;
-uniform float4 outputColor;
+#pragma once
 
-SamplerState textureSampler
-{
-    AddressU  = Clamp;
-    AddressV  = Clamp;
-    Filter    = Linear;
-};
+#define HOTKEY_CONTROL_EX_CLASS TEXT("OBSHotkeyControlEx")
 
-struct VertData
-{
-    float4 pos      : SV_Position;
-    float2 texCoord : TexCoord0;
-};
 
-float4 main(VertData input) : SV_Target
-{
-    //a nice quick colorspace conversion
-    float4 yuvx = diffuseTexture.Sample(textureSampler, input.texCoord);
-    yuvx -= float4(0.0625, 0.5, 0.5, 0.0);
-    yuvx.r *= 1.1640625;
+BASE_EXPORT void InitHotkeyExControl(HINSTANCE hInstance);
 
-    float4 rgbx = float4(yuvx.r + (1.58593*yuvx.b),
-                         yuvx.r - (0.81250*yuvx.b) - (0.39062*yuvx.g),
-                         yuvx.r + (2.01562*yuvx.g),
-                         1.0);
-
-    return saturate(rgbx) * outputColor;
-}

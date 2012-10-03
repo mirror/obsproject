@@ -259,9 +259,13 @@ enum
     ID_BANDWIDTHMETER,
 };
 
-#define OBS_REQUESTSTOP WM_USER+1
-#define OBS_CALLHOTKEY  WM_USER+2
-#define OBS_RECONNECT   WM_USER+3
+enum
+{
+    OBS_REQUESTSTOP=WM_USER+1,
+    OBS_CALLHOTKEY,
+    OBS_RECONNECT,
+    OBS_SETSCENE,
+};
 
 //----------------------------
 
@@ -428,6 +432,7 @@ class OBS
     UINT pushToTalkHotkeyID;
     UINT muteMicHotkeyID;
     UINT muteDesktopHotkeyID;
+    UINT stopStreamHotkeyID;
 
     bool bWriteToFile;
     VideoFileStream *fileStream;
@@ -487,6 +492,7 @@ class OBS
     void MoveSourcesToTop();
     void MoveSourcesToBottom();
     void CenterItems();
+    void FitItemsToScreen();
     void ResetItemSizes();
 
     void Start();
@@ -499,9 +505,15 @@ class OBS
     void MainAudioLoop();
     static DWORD STDCALL MainAudioThread(LPVOID lpUnused);
 
+    static void STDCALL StopStreamHotkey(DWORD hotkey, UPARAM param, bool bDown);
+
     static void STDCALL PushToTalkHotkey(DWORD hotkey, UPARAM param, bool bDown);
     static void STDCALL MuteMicHotkey(DWORD hotkey, UPARAM param, bool bDown);
     static void STDCALL MuteDesktopHotkey(DWORD hotkey, UPARAM param, bool bDown);
+
+    static void GetNewSceneName(String &strScene);
+    static void GetNewSourceName(String &strSource);
+
 
     static INT_PTR CALLBACK EnterGlobalSourceNameDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     static INT_PTR CALLBACK EnterSourceNameDialogProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);

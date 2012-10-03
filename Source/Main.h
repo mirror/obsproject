@@ -61,8 +61,9 @@ extern ConfigFile   *AppConfig;
 extern OBS          *App;
 extern TCHAR        lpAppDataPath[MAX_PATH];
 
-#define OBS_VERSION_STRING_ANSI "Open Broadcaster Software v0.401a"
-#define OBS_VERSION_STRING TEXT(OBS_VERSION_STRING_ANSI)
+#define OBS_VERSION             0x000410
+#define OBS_VERSION_STRING_ANSI "Open Broadcaster Software v0.41a"
+#define OBS_VERSION_STRING      TEXT(OBS_VERSION_STRING_ANSI)
 
 #define OBS_WINDOW_CLASS      TEXT("OBSWindowClass")
 #define OBS_RENDERFRAME_CLASS TEXT("RenderFrame")
@@ -82,6 +83,10 @@ __forceinline QWORD fastHtonll(QWORD qw) {return QWORD_BE(qw);}
 __forceinline DWORD fastHtonl (DWORD dw) {return DWORD_BE(dw);}
 __forceinline  WORD fastHtons (WORD  w)  {return  WORD_BE(w);}
 
+inline BOOL CloseDouble(double f1, double f2, double precision=0.001)
+{
+    return fabs(f1-f2) <= precision;
+}
 
 //-------------------------------------------
 // application headers

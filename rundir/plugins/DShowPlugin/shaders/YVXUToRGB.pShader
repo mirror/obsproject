@@ -17,9 +17,32 @@
 ********************************************************************************/
 
 
-#pragma once
+uniform Texture2D diffuseTexture;
 
-#define BANDWIDTH_METER_CLASS TEXT("OBSBandwidthMeter")
+SamplerState textureSampler
+{
+    AddressU  = Clamp;
+    AddressV  = Clamp;
+    Filter    = Linear;
+};
 
-void InitBandwidthMeter();
-void SetBandwidthMeterValue(HWND hwnd, UINT bytesPerSec, double strain);
+struct VertData
+{
+    float4 pos      : SV_Position;
+    float2 texCoord : TexCoord0;
+};
+
+float4 main(VertData input) : SV_Target
+{
+    //a nice quick colorspace conversion
+    float4 yuvx = diffuseTexture.Sample(textureSampler, input.texCoord).ragb;
+    yuvx -= float4(0.0625, 0.5, 0.5, 0.0);
+    yuvx.r *= 1.1640625;
+
+    float4 rgbx = float4(yuvx.r + (1.58593*yuvx.b),
+                         yuvx.r - (0.81250*yuvx.b) - (0.39062*yuvx.g),
+                         yuvx.r + (2.01562*yuvx.g),
+                         1.0);
+
+    return saturate(rgbx);
+}

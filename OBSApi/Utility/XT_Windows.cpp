@@ -48,6 +48,8 @@ HWND        hwndMainAppWindow = NULL;
 
 void   STDCALL OSInit()
 {
+    timeBeginPeriod(1);
+
     QueryPerformanceFrequency(&clockFreq);
     QueryPerformanceCounter(&startTime);
     startTick = GetTickCount();
@@ -56,6 +58,7 @@ void   STDCALL OSInit()
 
 void   STDCALL OSExit()
 {
+    timeEndPeriod(1);
 }
 
 
@@ -179,6 +182,7 @@ void   STDCALL OSExitProgram()
 
 void   STDCALL OSCriticalExit()
 {
+    SystemParametersInfo(SPI_SETSCREENSAVEACTIVE, 1, 0, 0);
     TerminateProcess(GetCurrentProcess(), INVALID);
 }
 
@@ -368,7 +372,7 @@ DWORD STDCALL OSGetTime()
     //NOTE: Credit goes to the amazingly awesome bullet physics library for this time code fix,
     //though I think this was basically copied out of the KB274323
 
-    LARGE_INTEGER currentTime;
+    /*LARGE_INTEGER currentTime;
     QueryPerformanceCounter(&currentTime);
     LONGLONG elapsedTime = currentTime.QuadPart - 
         startTime.QuadPart;
@@ -399,7 +403,9 @@ DWORD STDCALL OSGetTime()
     // Store the current elapsed time for adjustments next time.
     prevElapsedTime = elapsedTime;
 
-    return msecTicks;
+    return msecTicks;*/
+
+    return timeGetTime();
 }
 
 QWORD STDCALL OSGetTimeMicroseconds()

@@ -50,6 +50,9 @@ class MMDeviceAudioSource : public AudioSource
 
     List<float> audioBuffer;
 
+    INT64 startTimestamp;
+    INT64 lastTimestamp;
+
     //-----------------------------------------
 
     List<float> receiveBuffer;
@@ -84,7 +87,7 @@ public:
 
     virtual UINT GetNextBuffer();
 
-    virtual bool GetBuffer(float **buffer, UINT *numFrames);
+    virtual bool GetBuffer(float **buffer, UINT *numFrames, DWORD &timestamp);
 };
 
 AudioSource* CreateAudioSource(bool bMic, CTSTR lpID)
@@ -117,7 +120,7 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
     err = CoCreateInstance(CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&mmEnumerator);
     if(FAILED(err))
     {
-        CrashError(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IMMDeviceEnumerator"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IMMDeviceEnumerator"), (BOOL)bMic);
         return false;
     }
 
@@ -128,14 +131,14 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
 
     if(FAILED(err))
     {
-        CrashError(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IMMDevice"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IMMDevice"), (BOOL)bMic);
         return false;
     }
 
     err = mmDevice->Activate(IID_IAudioClient, CLSCTX_ALL, NULL, (void**)&mmClient);
     if(FAILED(err))
     {
-        CrashError(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IAudioClient"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IAudioClient"), (BOOL)bMic);
         return false;
     }
 
@@ -143,7 +146,7 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
     err = mmClient->GetMixFormat(&pwfx);
     if(FAILED(err))
     {
-        CrashError(TEXT("MMDeviceAudioSource::Initialize(%d): Could not get mix format from audio client"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not get mix format from audio client"), (BOOL)bMic);
         return false;
     }
 
@@ -162,13 +165,13 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
 
         if(wfext->SubFormat != KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
         {
-            CrashError(TEXT("MMDeviceAudioSource::Initialize(%d): Unsupported wave format"), (BOOL)bMic);
+            AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Unsupported wave format"), (BOOL)bMic);
             return false;
         }
     }
     else if(pwfx->wFormatTag != WAVE_FORMAT_IEEE_FLOAT)
     {
-        CrashError(TEXT("MMDeviceAudioSource::Initialize(%d): Unsupported wave format"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Unsupported wave format"), (BOOL)bMic);
         return false;
     }
 
@@ -181,14 +184,14 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
     err = mmClient->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, ConvertMSTo100NanoSec(5000), 0, pwfx, NULL);
     if(FAILED(err))
     {
-        CrashError(TEXT("MMDeviceAudioSource::Initialize(%d): Could not initialize audio client"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not initialize audio client"), (BOOL)bMic);
         return false;
     }
 
     err = mmClient->GetService(IID_IAudioCaptureClient, (void**)&mmCapture);
     if(FAILED(err))
     {
-        CrashError(TEXT("MMDeviceAudioSource::Initialize(%d): Could not get audio capture client"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not get audio capture client"), (BOOL)bMic);
         return false;
     }
 
@@ -208,6 +211,33 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
 
         resampleRatio = 44100.0 / double(inputSamplesPerSec);
         bResample = true;
+
+        //----------------------------------------------------
+        // hack to get rid of that weird first quirky resampled packet size
+        // (always returns a non-441 sized packet on the first resample)
+
+        SRC_DATA data;
+        data.src_ratio = resampleRatio;
+
+        List<float> blankBuffer;
+        blankBuffer.SetSize(inputSamplesPerSec/100*2);
+
+        data.data_in = blankBuffer.Array();
+        data.input_frames = inputSamplesPerSec/100;
+
+        UINT frameAdjust = UINT((double(data.input_frames) * resampleRatio) + 1.0);
+        UINT newFrameSize = frameAdjust*2;
+
+        resampleBuffer.SetSize(newFrameSize);
+
+        data.data_out = resampleBuffer.Array();
+        data.output_frames = frameAdjust;
+
+        data.end_of_input = 0;
+
+        int err = src_process(resampler, &data);
+
+        nop();
     }
 
     //-------------------------------------------------------------------------
@@ -318,13 +348,28 @@ UINT MMDeviceAudioSource::GetNextBuffer()
         DWORD dwFlags = 0;
         UINT numAudioFrames = 0;
 
-        err = mmCapture->GetBuffer(&captureBuffer, &numAudioFrames, &dwFlags, NULL, NULL);
+        UINT64 qpcTimestamp;
+        err = mmCapture->GetBuffer(&captureBuffer, &numAudioFrames, &dwFlags, NULL, &qpcTimestamp);
         if(FAILED(err))
         {
             AppWarning(TEXT("MMDeviceAudioSource::GetBuffer: GetBuffer failed"));
             MakeErrorBuffer();
             return AudioAvailable;
         }
+
+        lastTimestamp = qpcTimestamp/10000;
+
+        if(!startTimestamp)
+        {
+            if(dwFlags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) //literally praying to god here.
+                CrashError(TEXT("Could not get audio timestamp for first audio frame"));
+
+            startTimestamp = lastTimestamp;
+        }
+        else if(dwFlags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR)
+            lastTimestamp += 10;
+
+        lastTimestamp -= startTimestamp;
 
         if(audioBuffer.Num() < numAudioFrames*2)
             audioBuffer.SetSize(numAudioFrames*2);
@@ -590,7 +635,7 @@ UINT MMDeviceAudioSource::GetNextBuffer()
     traceOut;
 }
 
-bool MMDeviceAudioSource::GetBuffer(float **buffer, UINT *numFrames)
+bool MMDeviceAudioSource::GetBuffer(float **buffer, UINT *numFrames, DWORD &timestamp)
 {
     if(receiveBuffer.Num() < (441*2))
         return false;
@@ -598,6 +643,7 @@ bool MMDeviceAudioSource::GetBuffer(float **buffer, UINT *numFrames)
     bClearSegment = true;
     *buffer = receiveBuffer.Array();
     *numFrames = 441;
+    timestamp = DWORD(lastTimestamp);
 
     return true;
 }

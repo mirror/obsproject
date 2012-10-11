@@ -33,7 +33,7 @@ public:
 class NullAudioEncoder : public AudioEncoder
 {
 public:
-    virtual bool    Encode(float *input, UINT numInputFrames, DataPacket &packet) {return true;}
+    virtual bool    Encode(float *input, UINT numInputFrames, DataPacket &packet, DWORD &timestamp) {return true;}
     virtual void    GetHeaders(DataPacket &packet) {}
     virtual UINT    GetFrameSize() const {return 0;}
     virtual int     GetBitRate() const {return 0;}
@@ -47,6 +47,7 @@ class NullNetwork : public NetworkStream
 
     double GetPacketStrain() const {return 0;}
     QWORD GetCurrentSentBytes() {return 0;}
+    virtual DWORD NumDroppedFrames() const {return 0;}
 };
 
 

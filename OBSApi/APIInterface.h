@@ -75,6 +75,7 @@ public:
     virtual void GetBaseSize(UINT &width, UINT &height) const=0;
     virtual void GetRenderFrameSize(UINT &width, UINT &height) const=0;
     virtual void GetOutputSize(UINT &width, UINT &height) const=0;
+    virtual UINT GetMaxFPS() const=0;
 
     virtual CTSTR GetLanguage() const=0;
 
@@ -88,7 +89,25 @@ public:
     virtual void SetStreamInfoPriority(UINT infoID, StreamInfoPriority priority)=0;
     virtual void RemoveStreamInfo(UINT infoID)=0;
 
+    virtual bool UseMultithreadedOptimizations() const=0;
+
     inline bool SSE2Available() {return bSSE2Availabe;}
+
+    inline ImageSource* GetSceneImageSource(CTSTR lpImageSource)
+    {
+        Scene *scene = GetScene();
+        if(scene)
+        {
+            SceneItem *item = scene->GetSceneItem(lpImageSource);
+            if(item)
+            {
+                if(item->GetSource())
+                    return item->GetSource();
+            }
+        }
+
+        return NULL;
+    }
 };
 
 

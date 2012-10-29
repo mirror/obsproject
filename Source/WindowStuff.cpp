@@ -258,6 +258,8 @@ LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM
 {
     if(message == WM_RBUTTONDOWN)
     {
+        CallWindowProc(listboxProc, hwnd, WM_LBUTTONDOWN, wParam, lParam);
+
         UINT id = (UINT)GetWindowLongPtr(hwnd, GWL_ID);
 
         HMENU hMenu = CreatePopupMenu();
@@ -1602,6 +1604,10 @@ LRESULT CALLBACK OBS::OBSProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
                 case ID_FILE_EXIT:
                 case ID_EXIT:
                     PostQuitMessage(0);
+                    break;
+
+                case ID_HELP_VISITWEBSITE:
+                    ShellExecute(NULL, TEXT("open"), TEXT("http://www.obsproject.com"), 0, 0, SW_SHOWNORMAL);
                     break;
 
                 case ID_HELP_CONTENTS:

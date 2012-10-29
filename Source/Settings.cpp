@@ -1200,11 +1200,11 @@ INT_PTR CALLBACK OBS::VideoSettingsProc(HWND hwnd, UINT message, WPARAM wParam, 
                 hwndTemp = GetDlgItem(hwnd, IDC_FPS);
                 SendMessage(hwndTemp, UDM_SETRANGE32, 10, 60);
 
-                int fps = AppConfig->GetInt(TEXT("Video"), TEXT("FPS"), 25);
+                int fps = AppConfig->GetInt(TEXT("Video"), TEXT("FPS"), 30);
                 if(!AppConfig->HasKey(TEXT("Video"), TEXT("FPS")) || fps < 10 || fps > 60)
                 {
-                    AppConfig->SetInt(TEXT("Video"), TEXT("FPS"), 25);
-                    fps = 25;
+                    AppConfig->SetInt(TEXT("Video"), TEXT("FPS"), 30);
+                    fps = 30;
                 }
 
                 SendMessage(hwndTemp, UDM_SETPOS32, 0, fps);
@@ -1240,6 +1240,9 @@ INT_PTR CALLBACK OBS::VideoSettingsProc(HWND hwnd, UINT message, WPARAM wParam, 
                             int sel = (int)SendMessage(GetDlgItem(hwnd, IDC_MONITOR), CB_GETCURSEL, 0, 0);
                             if(sel != CB_ERR)
                             {
+                                if(sel >= (int)App->monitors.Num())
+                                    sel = 0;
+
                                 MonitorInfo &monitor = App->monitors[sel];
 
                                 int cx, cy;
@@ -1267,6 +1270,9 @@ INT_PTR CALLBACK OBS::VideoSettingsProc(HWND hwnd, UINT message, WPARAM wParam, 
                             int sel = (int)SendMessage(GetDlgItem(hwnd, IDC_MONITOR), CB_GETCURSEL, 0, 0);
                             if(sel != CB_ERR)
                             {
+                                if(sel >= (int)App->monitors.Num())
+                                    sel = 0;
+
                                 MonitorInfo &monitor = App->monitors[sel];
 
                                 int cx, cy;
@@ -1508,6 +1514,11 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
                 SendMessage(hwndToolTip, TTM_SETMAXTIPWIDTH, 0, 500);
                 SendMessage(hwndToolTip, TTM_SETDELAYTIME, TTDT_AUTOPOP, 14000);
 
+                //------------------------------------
+
+                bool bUseMTOptimizations = AppConfig->GetInt(TEXT("General"), TEXT("UseMultithreadedOptimizations"), TRUE) != 0;
+                SendMessage(GetDlgItem(hwnd, IDC_USEMULTITHREADEDOPTIMIZATIONS), BM_SETCHECK, bUseMTOptimizations ? BST_CHECKED : BST_UNCHECKED, 0);
+
                 //--------------------------------------------
 
                 HWND hwndTemp = GetDlgItem(hwnd, IDC_PRESET);
@@ -1557,6 +1568,15 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
 
                 //------------------------------------
 
+                bool bUseHQResampling = AppConfig->GetInt(TEXT("Audio"), TEXT("UseHighQualityResampling"), FALSE) != 0;
+                SendMessage(GetDlgItem(hwnd, IDC_USEHIGHQUALITYRESAMPLING), BM_SETCHECK, bUseHQResampling ? BST_CHECKED : BST_UNCHECKED, 0);
+
+                ti.lpszText = (LPWSTR)Str("Settings.Advanced.UseHighQualityResamplingTooltip");
+                ti.uId = (UINT_PTR)GetDlgItem(hwnd, IDC_USEHIGHQUALITYRESAMPLING);
+                SendMessage(hwndToolTip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+
+                //------------------------------------
+
                 BOOL bUseSendBuffer = AppConfig->GetInt(TEXT("Publish"), TEXT("UseSendBuffer"), 1) != 0;
                 SendMessage(GetDlgItem(hwnd, IDC_USESENDBUFFER), BM_SETCHECK, bUseSendBuffer ? BST_CHECKED : BST_UNCHECKED, 0);
 
@@ -1567,7 +1587,7 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
                 SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("8192"));
                 SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("4096"));
 
-                LoadSettingTextComboString(hwndTemp, TEXT("Publish"), TEXT("SendBufferSize"), TEXT("32768"));
+                LoadSettingTextComboString(hwndTemp, TEXT("Publish"), TEXT("SendBufferSize"), TEXT("8196"));
 
                 ti.lpszText = (LPWSTR)Str("Settings.Advanced.UseSendBufferTooltip");
                 ti.uId = (UINT_PTR)GetDlgItem(hwnd, IDC_USESENDBUFFER);
@@ -1588,6 +1608,14 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
                         BOOL bUseVideoEncoderSettings = SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED;
                         EnableWindow(GetDlgItem(hwnd, IDC_VIDEOENCODERSETTINGS), bUseVideoEncoderSettings);
 
+                        ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_SHOW);
+                        App->SetChangedSettings(true);
+                    }
+                    break;
+
+                case IDC_VIDEOENCODERSETTINGS:
+                    if(HIWORD(wParam) == EN_CHANGE)
+                    {
                         ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_SHOW);
                         App->SetChangedSettings(true);
                     }
@@ -1616,13 +1644,6 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
                     break;
 
                 case IDC_SENDBUFFERSIZE:
-                    if(HIWORD(wParam) == CBN_SELCHANGE)
-                    {
-                        ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_SHOW);
-                        App->SetChangedSettings(true);
-                    }
-                    break;
-
                 case IDC_PRESET:
                     if(HIWORD(wParam) == CBN_SELCHANGE)
                     {
@@ -1631,6 +1652,8 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
                     }
                     break;
 
+                case IDC_USEHIGHQUALITYRESAMPLING:
+                case IDC_USEMULTITHREADEDOPTIMIZATIONS:
                 case IDC_USESYNCFIX:
                     if(HIWORD(wParam) == BN_CLICKED)
                     {
@@ -1787,7 +1810,7 @@ void OBS::ApplySettings()
 
                 BOOL bFailed;
                 int fps = (int)SendMessage(GetDlgItem(hwndCurrentSettings, IDC_FPS), UDM_GETPOS32, 0, (LPARAM)&bFailed);
-                AppConfig->SetInt(TEXT("Video"), TEXT("FPS"), (bFailed) ? 25 : fps);
+                AppConfig->SetInt(TEXT("Video"), TEXT("FPS"), (bFailed) ? 30 : fps);
 
                 curSel = (int)SendMessage(GetDlgItem(hwndCurrentSettings, IDC_DOWNSCALE), CB_GETCURSEL, 0, 0);
                 if(curSel != CB_ERR)
@@ -1887,6 +1910,11 @@ void OBS::ApplySettings()
 
                 //--------------------------------------------------
 
+                bool bUseMTOptimizations = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_USEMULTITHREADEDOPTIMIZATIONS), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                AppConfig->SetInt(TEXT("General"), TEXT("UseMultithreadedOptimizations"), bUseMTOptimizations);
+
+                //--------------------------------------------------
+
                 BOOL bUseCustomX264Settings = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_USEVIDEOENCODERSETTINGS), BM_GETCHECK, 0, 0) == BST_CHECKED;
                 String strCustomX264Settings = GetEditText(GetDlgItem(hwndCurrentSettings, IDC_VIDEOENCODERSETTINGS));
 
@@ -1897,6 +1925,11 @@ void OBS::ApplySettings()
 
                 BOOL bUseVideoSyncFix = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_USESYNCFIX), BM_GETCHECK, 0, 0) == BST_CHECKED;
                 AppConfig->SetInt   (TEXT("Video Encoding"), TEXT("UseSyncFix"),        bUseVideoSyncFix);
+
+                //------------------------------------
+
+                BOOL bUseHQResampling = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_USEHIGHQUALITYRESAMPLING), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                AppConfig->SetInt   (TEXT("Audio"), TEXT("UseHighQualityResampling"), bUseHQResampling);
 
                 //--------------------------------------------------
 

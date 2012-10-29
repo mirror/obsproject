@@ -25,6 +25,8 @@
 #include <intrin.h>
 #include <inttypes.h>
 
+#include <gdiplus.h>
+
 
 //----------------------------
 
@@ -97,7 +99,9 @@ void LogSystemStats()
     BYTE cpuExtModel    = (cpuInfo[0]>>17) & 0xF;
     BYTE cpuExtFamily   = (cpuInfo[0]>>21) & 0xFF;
 
-    Log(TEXT("stepping id: %u, model %u, family %u, type %u, extmodel %u, extfamily %u"), cpuSteppingID, cpuModel, cpuFamily, cpuType, cpuExtModel, cpuExtFamily);
+    BYTE cpuHTT         = (cpuInfo[3]>>28) & 1;
+
+    Log(TEXT("stepping id: %u, model %u, family %u, type %u, extmodel %u, extfamily %u, HTT %u, logical cores %u, total cores %u"), cpuSteppingID, cpuModel, cpuFamily, cpuType, cpuExtModel, cpuExtFamily, cpuHTT, OSGetLogicalCores(), OSGetTotalCores());
 
     LogVideoCardStats();
 }
@@ -169,7 +173,7 @@ void SetupIni()
     AppConfig->SetFloat (TEXT("Audio"),          TEXT("DesktopVolume"), 1.0f);
 
     AppConfig->SetInt   (TEXT("Video"),          TEXT("Monitor"),       0);
-    AppConfig->SetInt   (TEXT("Video"),          TEXT("FPS"),           25);
+    AppConfig->SetInt   (TEXT("Video"),          TEXT("FPS"),           30);
     AppConfig->SetFloat (TEXT("Video"),          TEXT("Downscale"),     1.0f);
     AppConfig->SetInt   (TEXT("Video"),          TEXT("DisableAero"),   0);
 
@@ -239,6 +243,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     //------------------------------------------------------------
 
     hinstMain = hInstance;
+
+    ULONG_PTR gdipToken;
+    const Gdiplus::GdiplusStartupInput gdipInput;
+    Gdiplus::GdiplusStartup(&gdipToken, &gdipInput, NULL);
 
     if(InitXT(NULL, TEXT("FastAlloc")))
     {
@@ -382,6 +390,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         traceOutStop;
     }
+
+    Gdiplus::GdiplusShutdown(gdipToken);
 
     TerminateXT();
 

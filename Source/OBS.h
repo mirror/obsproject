@@ -329,7 +329,7 @@ class OBS
     //---------------------------------------------------
     // graphics stuff
 
-    ID3D10Texture2D *copyTexture;
+    ID3D10Texture2D *copyTextures[2];
 
     Texture *mainRenderTextures[NUM_RENDER_BUFFERS];
     Texture *yuvRenderTextures[NUM_RENDER_BUFFERS];
@@ -404,6 +404,7 @@ class OBS
 
     String  strLanguage;
     bool    bTestStream;
+    bool    bUseMultithreadedOptimizations;
     bool    bRunning;
     int     renderFrameWidth, renderFrameHeight;
     int     borderXSize, borderYSize;
@@ -609,13 +610,20 @@ public:
 
     inline void PostStopMessage() {if(hwndMain) PostMessage(hwndMain, OBS_REQUESTSTOP, 0, 0);}
 
-    inline Vect2 GetBaseSize()        const {return Vect2(float(baseCX), float(baseCY));}
-    inline Vect2 GetOutputSize()      const {return Vect2(float(outputCX), float(outputCY));}
-    inline Vect2 GetRenderFrameSize() const {return Vect2(float(renderFrameWidth), float(renderFrameHeight));}
+    void GetBaseSize(UINT &width, UINT &height) const;
 
-    inline void GetBaseSize(UINT &width, UINT &height) const           {width = baseCX;           height = baseCY;}
     inline void GetRenderFrameSize(UINT &width, UINT &height) const    {width = renderFrameWidth; height = renderFrameHeight;}
     inline void GetOutputSize(UINT &width, UINT &height) const         {width = outputCX;         height = outputCY;}
+
+    inline Vect2 GetBaseSize() const
+    {
+        UINT width, height;
+        GetBaseSize(width, height);
+        return Vect2(float(width), float(height));
+    }
+
+    inline Vect2 GetOutputSize()      const {return Vect2(float(outputCX), float(outputCY));}
+    inline Vect2 GetRenderFrameSize() const {return Vect2(float(renderFrameWidth), float(renderFrameHeight));}
 
     inline bool SSE2Available() const {return bSSE2Available;}
 
@@ -630,7 +638,7 @@ public:
     inline UINT GetFrameTime() const {return frameTime;}
 
     inline UINT NumMonitors()  const {return monitors.Num();}
-    inline const MonitorInfo& GetMonitor(UINT id) const {return monitors[id];}
+    inline const MonitorInfo& GetMonitor(UINT id) const {if(id < monitors.Num()) return monitors[id]; else return monitors[0];}
 
     inline XElement* GetSceneElement() const {return sceneElement;}
 

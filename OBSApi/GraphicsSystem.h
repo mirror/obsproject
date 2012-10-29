@@ -31,7 +31,7 @@ enum GSDrawMode {GS_POINTS, GS_LINES, GS_LINESTRIP, GS_TRIANGLES, GS_TRIANGLESTR
 
 //---------------------------------
 //texture formats
-enum GSColorFormat {GS_UNKNOWNFORMAT, GS_ALPHA, GS_GRAYSCALE, GS_RGB, GS_RGBA, GS_BGR, GS_BGRA, GS_RGBA16F, GS_RGBA32F, GS_DXT1, GS_DXT3, GS_DXT5};
+enum GSColorFormat {GS_UNKNOWNFORMAT, GS_ALPHA, GS_GRAYSCALE, GS_RGB, GS_RGBA, GS_BGR, GS_BGRA, GS_RGBA16F, GS_RGBA32F, GS_B5G5R5A1, GS_B5G6R5, GS_R10G10B10A2, GS_DXT1, GS_DXT3, GS_DXT5};
 
 
 //---------------------------------
@@ -388,6 +388,7 @@ public:
 
     //----------------------------------------------------
     //Texture Functions
+    virtual Texture*        CreateTextureFromSharedHandle(unsigned int width, unsigned int height, GSColorFormat colorFormat, HANDLE handle)=0;
     virtual Texture*        CreateTexture(unsigned int width, unsigned int height, GSColorFormat colorFormat, void *lpData, BOOL bBuildMipMaps, BOOL bStatic)=0;
     virtual Texture*        CreateTextureFromFile(CTSTR lpFile, BOOL bBuildMipMaps)=0;
     virtual Texture*        CreateRenderTarget(unsigned int width, unsigned int height, GSColorFormat colorFormat, BOOL bGenMipMaps)=0;
@@ -450,8 +451,8 @@ public:
 
     inline void  Vertex(const Vect2 &v2) {Vertex(Vect(v2));}
 
-    void DrawSprite(Texture *texture, DWORD color, float x, float y, float x2 = -1.0f, float y2 = -1.0f);
-    virtual void DrawSpriteEx(Texture *texture, DWORD color, float x, float y, float x2 = -1.0f, float y2 = -1.0f, float u = -1.0f, float v = -1.0f, float u2 = -1.0f, float v2 = -1.0f)=0;
+    void DrawSprite(Texture *texture, DWORD color, float x, float y, float x2 = -998.0f, float y2 = -998.0f);
+    virtual void DrawSpriteEx(Texture *texture, DWORD color, float x, float y, float x2 = -998.0f, float y2 = -998.0f, float u = -998.0f, float v = -998.0f, float u2 = -998.0f, float v2 = -998.0f)=0;
     virtual void DrawBox(const Vect2 &upperLeft, const Vect2 &size)=0;
 
 
@@ -570,9 +571,9 @@ inline void  Frustum(float left, float right, float top, float bottom, float zne
 
 inline void  SetViewport(float x, float y, float width, float height) {GS->SetViewport(x, y, width, height);}
 
-inline void DrawSprite(Texture *texture, DWORD color, float x, float y, float x2 = -1.0f, float y2 = -1.0f)
+inline void DrawSprite(Texture *texture, DWORD color, float x, float y, float x2 = -998.0f, float y2 = -998.0f)
     {GS->DrawSprite(texture, color, x, y, x2, y2);}
-inline void DrawSpriteEx(Texture *texture, DWORD color, float x, float y, float x2 = -1.0f, float y2 = -1.0f, float u = -1.0f, float v = -1.0f, float u2 = -1.0f, float v2 = -1.0f)
+inline void DrawSpriteEx(Texture *texture, DWORD color, float x, float y, float x2 = -998.0f, float y2 = -998.0f, float u = -998.0f, float v = -998.0f, float u2 = -998.0f, float v2 = -998.0f)
     {GS->DrawSpriteEx(texture, color, x, y, x2, y2, u, v, u2, v2);}
 inline void DrawBox(const Vect2 &upperLeft, const Vect2 &size)
     {GS->DrawBox(upperLeft, size);}

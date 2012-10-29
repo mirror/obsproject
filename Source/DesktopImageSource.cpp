@@ -92,20 +92,24 @@ public:
             HWND hwndCapture = NULL;
             if(captureType == 1)
             {
-                hwndCapture = FindWindow(strWindowClass, strWindow);
-                if(!hwndCapture)
+                if(hwndFoundWindow && IsWindow(hwndFoundWindow))
                 {
-                    if(hwndFoundWindow && IsWindow(hwndFoundWindow))
-                    {
-                        TCHAR lpClassName[256];
-                        BOOL bSuccess = GetClassName(hwndFoundWindow, lpClassName, 255);
+                    TCHAR lpClassName[256];
+                    BOOL bSuccess = GetClassName(hwndFoundWindow, lpClassName, 255);
 
-                        if(bSuccess && scmpi(lpClassName, strWindowClass) == 0)
-                            hwndCapture = hwndFoundWindow;
-                        else
+                    if(bSuccess && scmpi(lpClassName, strWindowClass) == 0)
+                        hwndCapture = hwndFoundWindow;
+                    else
+                    {
+                        hwndCapture = FindWindow(strWindowClass, strWindow);
+                        if(!hwndCapture)
                             hwndCapture = FindWindow(strWindowClass, NULL);
                     }
-                    else
+                }
+                else
+                {
+                    hwndCapture = FindWindow(strWindowClass, strWindow);
+                    if(!hwndCapture)
                         hwndCapture = FindWindow(strWindowClass, NULL);
                 }
 
@@ -150,12 +154,7 @@ public:
                 FillRect(hDC, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
 
                 if(!warningID)
-                {
-                    String strWarning;
-
-                    strWarning << Str("Sources.SoftwareCaptureSource.WindowNotFound");
-                    warningID = App->AddStreamInfo(strWarning, bWindowNotFound ? StreamInfoPriority_High : StreamInfoPriority_Medium);
-                }
+                    warningID = App->AddStreamInfo(Str("Sources.SoftwareCaptureSource.WindowNotFound"), bWindowNotFound ? StreamInfoPriority_High : StreamInfoPriority_Medium);
             }
             else
             {
@@ -381,6 +380,9 @@ void SelectTargetWindow(HWND hwnd)
     String strWindow = GetCBText(hwndWindowList, windowID);
 
     ConfigDesktopSourceInfo *info = (ConfigDesktopSourceInfo*)GetWindowLongPtr(hwnd, DWLP_USER);
+
+    if(windowID >= info->strClasses.Num())
+        return;
 
     HWND hwndTarget = FindWindow(info->strClasses[windowID], strWindow);
     if(!hwndTarget)
@@ -880,6 +882,12 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                             UINT windowID = (UINT)SendMessage(GetDlgItem(hwnd, IDC_WINDOW), CB_GETCURSEL, 0, 0);
                             if(windowID == CB_ERR) windowID = 0;
 
+                            if(windowID >= info->strClasses.Num())
+                            {
+                                MessageBox(hwnd, Str("Sources.SoftwareCaptureSource.WindowNotFound"), NULL, 0);
+                                break;
+                            }
+
                             String strWindow = GetCBText(GetDlgItem(hwnd, IDC_WINDOW), windowID);
 
                             regionWindowData.hwndCaptureWindow = FindWindow(info->strClasses[windowID], strWindow);
@@ -996,6 +1004,11 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                         UINT windowID = (UINT)SendMessage(GetDlgItem(hwnd, IDC_WINDOW), CB_GETCURSEL, 0, 0);
                         if(windowID == CB_ERR) windowID = 0;
 
+                        ConfigDesktopSourceInfo *info = (ConfigDesktopSourceInfo*)GetWindowLongPtr(hwnd, DWLP_USER);
+
+                        if(windowID >= info->strClasses.Num())
+                            break;
+
                         String strWindow = GetCBText(GetDlgItem(hwnd, IDC_WINDOW), windowID);
 
                         BOOL bInnerWindow = SendMessage(GetDlgItem(hwnd, IDC_INNERWINDOW), BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -1015,7 +1028,6 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
 
                         //---------------------------------
 
-                        ConfigDesktopSourceInfo *info = (ConfigDesktopSourceInfo*)GetWindowLongPtr(hwnd, DWLP_USER);
                         XElement *data = info->data;
 
                         data->SetInt(TEXT("captureType"),   captureType);

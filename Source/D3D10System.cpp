@@ -72,7 +72,7 @@ D3D10System::D3D10System()
     swapDesc.SampleDesc.Count = 1;
     swapDesc.Windowed = TRUE;
 
-    bDisableCompatibilityMode = AppConfig->GetInt(TEXT("Video"), TEXT("DisableD3DCompatibilityMode"), 1) != 0;
+    bDisableCompatibilityMode = 1;//AppConfig->GetInt(TEXT("Video"), TEXT("DisableD3DCompatibilityMode"), 1) != 0;
 
     UINT createFlags = D3D10_CREATE_DEVICE_BGRA_SUPPORT;
     if(GlobalConfig->GetInt(TEXT("General"), TEXT("UseDebugD3D")))
@@ -242,6 +242,11 @@ void D3D10System::Init()
 
 ////////////////////////////
 //Texture Functions
+Texture* D3D10System::CreateTextureFromSharedHandle(unsigned int width, unsigned int height, GSColorFormat colorFormat, HANDLE handle)
+{
+    return D3D10Texture::CreateFromSharedHandle(width, height, colorFormat, handle);
+}
+
 Texture* D3D10System::CreateTexture(unsigned int width, unsigned int height, GSColorFormat colorFormat, void *lpData, BOOL bBuildMipMaps, BOOL bStatic)
 {
     return D3D10Texture::CreateTexture(width, height, colorFormat, lpData, bBuildMipMaps, bStatic);
@@ -642,13 +647,21 @@ void D3D10System::DrawSpriteEx(Texture *texture, DWORD color, float x, float y, 
     if(hColor)
         curPixelShader->SetColor(hColor, color);
 
-    if(x2 == -1.0f) x2 = float(texture->Width());
-    if(y2 == -1.0f) y2 = float(texture->Height());
-
-    if(u  == -1.0f) u = 0.0f;
-    if(v  == -1.0f) v = 0.0f;
-    if(u2 == -1.0f) u2 = 1.0f;
-    if(v2 == -1.0f) v2 = 1.0f;
+    if(x2 == -998.0f && y2 == -998.0f)
+    {
+        x2 = float(texture->Width());
+        y2 = float(texture->Height());
+    }
+    if(u == -998.0f && v == -998.0f)
+    {
+        u = 0.0f;
+        v = 0.0f;
+    }
+    if(u2 == -998.0f && v2 == -998.0f)
+    {
+        u2 = 1.0f;
+        v2 = 1.0f;
+    }
 
     VBData *data = spriteVertexBuffer->GetData();
     data->VertList[0].Set(x,  y,  0.0f);

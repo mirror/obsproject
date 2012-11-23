@@ -29,10 +29,10 @@ class DesktopImageSource : public ImageSource
 
     UINT     captureType;
     String   strWindow, strWindowClass;
-    BOOL     bClientCapture, bCaptureMouse;
+    BOOL     bClientCapture, bCaptureMouse, bCaptureLayered;
     HWND     hwndFoundWindow;
 
-    Shader   *colorKeyShader;
+    Shader   *colorKeyShader, *alphaIgnoreShader;
 
     int      width, height;
     RECT     captureRect;
@@ -46,46 +46,39 @@ class DesktopImageSource : public ImageSource
     DWORD    keyColor;
     UINT     keySimilarity, keyBlend;
 
+    UINT     opacity;
+
 public:
     DesktopImageSource(UINT frameTime, XElement *data)
     {
-        //traceIn(DesktopImageSource::DesktopImageSource);
-
         this->data = data;
         UpdateSettings();
 
         curCaptureTexture = 0;
         this->frameTime = frameTime;
 
-        //-------------------------------------------------------
-
-        //traceOut;
+        colorKeyShader      = CreatePixelShaderFromFile(TEXT("shaders\\ColorKey_RGB.pShader"));
+        alphaIgnoreShader   = CreatePixelShaderFromFile(TEXT("shaders\\AlphaIgnore.pShader"));
     }
 
     ~DesktopImageSource()
     {
-        //traceIn(DesktopImageSource::~DesktopImageSource);
-
         for(int i=0; i<NUM_CAPTURE_TEXTURES; i++)
             delete renderTextures[i];
 
         if(warningID)
             App->RemoveStreamInfo(warningID);
 
-        if(colorKeyShader)
-            delete colorKeyShader;
-
-        //traceOut;
+        delete alphaIgnoreShader;
+        delete colorKeyShader;
     }
 
     void Preprocess()
     {
-        //traceIn(DesktopImageSource::Preprocess);
-
         Texture *captureTexture = renderTextures[curCaptureTexture];
 
         HDC hDC;
-        if(captureTexture->GetDC(hDC))
+        if(captureTexture && captureTexture->GetDC(hDC))
         {
             //----------------------------------------------------------
             // capture screen
@@ -167,11 +160,12 @@ public:
             }
             else
             {
-                //CAPTUREBLT causes mouse flicker.  I haven't seen anything that doesn't display without it yet, so not going to use it
-                if(!BitBlt(hDC, 0, 0, width, height, hCaptureDC, captureRect.left, captureRect.top, SRCCOPY))
+                //CAPTUREBLT causes mouse flicker, so make capturing layered optional
+                if(!BitBlt(hDC, 0, 0, width, height, hCaptureDC, captureRect.left, captureRect.top, bCaptureLayered ? SRCCOPY|CAPTUREBLT : SRCCOPY))
                 {
                     int chi = GetLastError();
-                    AppWarning(TEXT("Capture BitBlt failed..  just so you know"));
+
+                    RUNONCE AppWarning(TEXT("Capture BitBlt failed..  just so you know"));
                 }
             }
 
@@ -223,27 +217,27 @@ public:
             captureTexture->ReleaseDC();
         }
         else
-            AppWarning(TEXT("Failed to get DC from capture surface"));
+        {
+            RUNONCE AppWarning(TEXT("Failed to get DC from capture surface"));
+        }
 
         lastRendered = captureTexture;
 
         if(++curCaptureTexture == NUM_CAPTURE_TEXTURES)
             curCaptureTexture = 0;
-
-        //traceOut;
     }
 
     void Render(const Vect2 &pos, const Vect2 &size)
     {
-        //traceIn(DesktopImageSource::Render);
-
         if(lastRendered)
         {
-            Shader *lastPixelShader;
+            Shader *lastPixelShader = GetCurrentPixelShader();
+
+            float fOpacity = float(opacity)*0.01f;
+            DWORD opacity255 = DWORD(fOpacity*255.0f);
 
             if(bUseColorKey)
             {
-                lastPixelShader = GetCurrentPixelShader();
                 LoadPixelShader(colorKeyShader);
 
                 float fSimilarity = float(keySimilarity)*0.01f;
@@ -252,19 +246,17 @@ public:
                 colorKeyShader->SetColor(colorKeyShader->GetParameter(2), keyColor);
                 colorKeyShader->SetFloat(colorKeyShader->GetParameter(3), fSimilarity);
                 colorKeyShader->SetFloat(colorKeyShader->GetParameter(4), fBlend);
+
+                DrawSprite(lastRendered, (opacity255<<24) | 0xFFFFFF, pos.x, pos.y, pos.x+size.x, pos.y+size.y);
             }
             else
-                EnableBlending(FALSE);
+            {
+                LoadPixelShader(alphaIgnoreShader);
+                DrawSprite(lastRendered, (opacity255<<24) | 0xFFFFFF, pos.x, pos.y, pos.x+size.x, pos.y+size.y);
+            }
 
-            DrawSprite(lastRendered, 0xFFFFFFFF, pos.x, pos.y, pos.x+size.x, pos.y+size.y);
-
-            if(bUseColorKey)
-                LoadPixelShader(lastPixelShader);
-            else
-                EnableBlending(TRUE);
+            LoadPixelShader(lastPixelShader);
         }
-
-        //traceOut;
     }
 
     Vect2 GetSize() const
@@ -282,6 +274,7 @@ public:
         BOOL bNewClientCapture  = data->GetInt(TEXT("innerWindow"), 1);
 
         bCaptureMouse   = data->GetInt(TEXT("captureMouse"), 1);
+        bCaptureLayered = data->GetInt(TEXT("captureLayered"), 0);
 
         int x  = data->GetInt(TEXT("captureX"));
         int y  = data->GetInt(TEXT("captureY"));
@@ -319,17 +312,9 @@ public:
         keySimilarity   = data->GetInt(TEXT("keySimilarity"), 10);
         keyBlend        = data->GetInt(TEXT("keyBlend"), 0);
 
-        if(bNewUseColorKey != bUseColorKey)
-        {
-            if(colorKeyShader)
-            {
-                delete colorKeyShader;
-                colorKeyShader = NULL;
-            }
+        bUseColorKey = bNewUseColorKey;
 
-            if(bUseColorKey = bNewUseColorKey)
-                colorKeyShader = CreatePixelShaderFromFile(TEXT("shaders\\ColorKey_RGB.pShader"));
-        }
+        opacity = data->GetInt(TEXT("opacity"), 100);
 
         App->LeaveSceneMutex();
     }
@@ -339,20 +324,7 @@ public:
         if(scmpi(lpName, TEXT("useColorKey")) == 0)
         {
             bool bNewVal = iVal != 0;
-            if(bUseColorKey != bNewVal)
-            {
-                API->EnterSceneMutex();
-                if(colorKeyShader)
-                {
-                    delete colorKeyShader;
-                    colorKeyShader = NULL;
-                }
-
-                if(bUseColorKey = bNewVal)
-                    colorKeyShader = CreatePixelShaderFromFile(TEXT("shaders\\ColorKey_RGB.pShader"));
-
-                API->LeaveSceneMutex();
-            }
+            bUseColorKey = bNewVal;
         }
         else if(scmpi(lpName, TEXT("keyColor")) == 0)
         {
@@ -365,6 +337,10 @@ public:
         else if(scmpi(lpName, TEXT("keyBlend")) == 0)
         {
             keyBlend = iVal;
+        }
+        else if(scmpi(lpName, TEXT("opacity")) == 0)
+        {
+            opacity = (UINT)iVal;
         }
     }
 };
@@ -396,7 +372,7 @@ void RefreshWindowList(HWND hwndCombobox, StringList &classList)
             DWORD styles = (DWORD)GetWindowLongPtr(hwndCurrent, GWL_STYLE);
 
             if( (exStyles & WS_EX_TOOLWINDOW) == 0 && (styles & WS_CHILD) == 0 &&
-                clientRect.bottom != 0 && clientRect.right != 0 && hwndParent == NULL)
+                clientRect.bottom != 0 && clientRect.right != 0 /*&& hwndParent == NULL*/)
             {
                 String strWindowName;
                 strWindowName.SetLength(GetWindowTextLength(hwndCurrent));
@@ -964,6 +940,13 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                 bool bMouseCapture = data->GetInt(TEXT("captureMouse"), 1) != FALSE;
                 SendMessage(GetDlgItem(hwnd, IDC_CAPTUREMOUSE), BM_SETCHECK, (bMouseCapture) ? BST_CHECKED : BST_UNCHECKED, 0);
 
+                bool bCaptureLayered = data->GetInt(TEXT("captureLayered"), 0) != FALSE;
+                SendMessage(GetDlgItem(hwnd, IDC_CAPTURELAYERED), BM_SETCHECK, (bCaptureLayered) ? BST_CHECKED : BST_UNCHECKED, 0);
+
+                ti.lpszText = (LPWSTR)Str("Sources.SoftwareCaptureSource.CaptureLayeredTip");
+                ti.uId = (UINT_PTR)GetDlgItem(hwnd, IDC_CAPTURELAYERED);
+                SendMessage(hwndToolTip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+
                 //-----------------------------------------------------
 
                 bool bRegion = data->GetInt(TEXT("regionCapture")) != FALSE;
@@ -1029,6 +1012,13 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                 EnableWindow(GetDlgItem(hwnd, IDC_BASETHRESHOLD), bUseColorKey);
                 EnableWindow(GetDlgItem(hwnd, IDC_BLEND_EDIT), bUseColorKey);
                 EnableWindow(GetDlgItem(hwnd, IDC_BLEND), bUseColorKey);
+
+                //------------------------------------------
+
+                UINT opacity = data->GetInt(TEXT("opacity"), 100);
+
+                SendMessage(GetDlgItem(hwnd, IDC_OPACITY2), UDM_SETRANGE32, 0, 100);
+                SendMessage(GetDlgItem(hwnd, IDC_OPACITY2), UDM_SETPOS32, 0, opacity);
 
                 return TRUE;
             }
@@ -1309,6 +1299,7 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                         break;
                     }
 
+                case IDC_OPACITY_EDIT:
                 case IDC_BASETHRESHOLD_EDIT:
                 case IDC_BLEND_EDIT:
                     if(HIWORD(wParam) == EN_CHANGE)
@@ -1325,6 +1316,7 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                                 {
                                     case IDC_BASETHRESHOLD_EDIT:    hwndVal = GetDlgItem(hwnd, IDC_BASETHRESHOLD); break;
                                     case IDC_BLEND_EDIT:            hwndVal = GetDlgItem(hwnd, IDC_BLEND); break;
+                                    case IDC_OPACITY_EDIT:          hwndVal = GetDlgItem(hwnd, IDC_OPACITY2); break;
                                 }
 
                                 int val = (int)SendMessage(hwndVal, UDM_GETPOS32, 0, 0);
@@ -1332,6 +1324,7 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                                 {
                                     case IDC_BASETHRESHOLD_EDIT:    source->SetInt(TEXT("keySimilarity"), val); break;
                                     case IDC_BLEND_EDIT:            source->SetInt(TEXT("keyBlend"), val); break;
+                                    case IDC_OPACITY_EDIT:          source->SetInt(TEXT("opacity"), val); break;
                                 }
                             }
                         }
@@ -1375,6 +1368,7 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                             sizeY = 32;
 
                         BOOL bCaptureMouse = SendMessage(GetDlgItem(hwnd, IDC_CAPTUREMOUSE), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                        BOOL bCaptureLayered = SendMessage(GetDlgItem(hwnd, IDC_CAPTURELAYERED), BM_GETCHECK, 0, 0) == BST_CHECKED;
 
                         //---------------------------------
 
@@ -1392,6 +1386,8 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
 
                         data->SetInt(TEXT("captureMouse"),  bCaptureMouse);
 
+                        data->SetInt(TEXT("captureLayered"), bCaptureLayered);
+
                         data->SetInt(TEXT("captureX"),      posX);
                         data->SetInt(TEXT("captureY"),      posY);
                         data->SetInt(TEXT("captureCX"),     sizeX);
@@ -1408,6 +1404,11 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                         data->SetInt(TEXT("keyColor"), keyColor);
                         data->SetInt(TEXT("keySimilarity"), keySimilarity);
                         data->SetInt(TEXT("keyBlend"), keyBlend);
+
+                        //---------------------------------
+
+                        UINT opacity = (UINT)SendMessage(GetDlgItem(hwnd, IDC_OPACITY2), UDM_GETPOS32, 0, 0);
+                        data->SetInt(TEXT("opacity"), opacity);
                     }
 
                 case IDCANCEL:
@@ -1422,6 +1423,7 @@ INT_PTR CALLBACK ConfigDesktopSourceProc(HWND hwnd, UINT message, WPARAM wParam,
                             source->SetInt(TEXT("keyColor"),      data->GetInt(TEXT("keyColor"), 0xFFFFFFFF));
                             source->SetInt(TEXT("keySimilarity"), data->GetInt(TEXT("keySimilarity"), 10));
                             source->SetInt(TEXT("keyBlend"),      data->GetInt(TEXT("keyBlend"), 0));
+                            source->SetInt(TEXT("opacity"),       data->GetInt(TEXT("opacity"), 100));
                         }
                     }
 

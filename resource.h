@@ -30,6 +30,7 @@
 #define IDD_CONFIGURETRANSITIONSOURCE   135
 #define IDD_BUILDINGMP4                 137
 #define IDD_CONFIGURETEXTSOURCE         139
+#define IDD_ENDINGDELAY                 140
 #define IDC_SETTINGSLIST                1006
 #define IDC_SUBDIALOG                   1007
 #define IDC_MODE                        1008
@@ -38,6 +39,7 @@
 #define IDC_PLAYPATH                    1011
 #define IDC_CHANNELNAME                 1012
 #define IDC_QUALITY                     1012
+#define IDC_URL                         1012
 #define IDC_SERVER                      1013
 #define IDC_PRESET                      1013
 #define IDC_SERVERLIST                  1013
@@ -81,8 +83,10 @@
 #define IDC_USESENDBUFFER               1042
 #define IDC_FORCEMONO                   1042
 #define IDC_SCROLLSPEED                 1042
+#define IDC_OPACITY2                    1042
 #define IDC_CHANNELNAME_STATIC          1043
 #define IDC_EXTENTWIDTH_EDIT            1043
+#define IDC_URL_STATIC                  1043
 #define IDC_PLAYPATH_STATIC             1044
 #define IDC_SCROLLSPEED3                1044
 #define IDC_EXTENTHEIGHT_EDIT           1044
@@ -145,6 +149,8 @@
 #define IDC_SAVEPATH_STATIC             1082
 #define IDC_EXTENTWIDTH                 1082
 #define IDC_EXTENTHEIGHT                1083
+#define IDC_DELAY_EDIT                  1083
+#define IDC_DELAY                       1084
 #define IDC_USESYNCFIX                  1086
 #define IDC_CLEARPUSHTOTALK             1088
 #define IDC_CLEARMUTEMIC                1089
@@ -162,6 +168,7 @@
 #define IDC_USED3DCOMPATIBILITY         1099
 #define IDC_DISABLED3DCOMPATIBILITY     1099
 #define IDC_USEMULTITHREADEDOPTIMIZATIONS 1099
+#define IDC_CAPTURELAYERED              1099
 #define IDC_TIMER1                      1100
 #define IDC_PROGRESS1                   1101
 #define IDC_DASHBOARDLINK_STATIC        1102
@@ -182,7 +189,11 @@
 #define IDC_ALIGN                       1124
 #define IDC_SELECT                      1125
 #define IDC_BOLD                        1126
+#define IDC_DELAY_STATIC                1126
 #define IDC_ITALIC                      1127
+#define IDC_TIMELEFT                    1127
+#define IDC_UNLOCKHIGHFPS               1128
+#define IDC_CANCEL                      1130
 #define IDA_SOURCE_MOVEUP               40018
 #define IDA_SOURCE_MOVEDOWN             40019
 #define IDA_SOURCE_MOVETOTOP            40020
@@ -211,9 +222,9 @@
 // 
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        140
+#define _APS_NEXT_RESOURCE_VALUE        141
 #define _APS_NEXT_COMMAND_VALUE         40044
-#define _APS_NEXT_CONTROL_VALUE         1126
+#define _APS_NEXT_CONTROL_VALUE         1132
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif

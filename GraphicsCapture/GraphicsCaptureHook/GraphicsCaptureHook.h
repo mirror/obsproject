@@ -34,7 +34,15 @@
 
 #include <string>
 #include <sstream>
+#include <fstream>
 using namespace std;
+
+//arghh I hate defines like this
+#define RUNONCE static bool bRunOnce = false; if(!bRunOnce && (bRunOnce = true))
+
+
+#define SafeRelease(var) if(var) {var->Release(); var = NULL;}
+
 
 #ifdef _WIN64
 typedef unsigned __int64 UPARAM;
@@ -42,28 +50,16 @@ typedef unsigned __int64 UPARAM;
 typedef unsigned long UPARAM;
 #endif
 
-
-#define SafeRelease(var) if(var) {var->Release(); var = NULL;}
-
-
-struct DummyClass {};
-typedef HRESULT (DummyClass::*CLASSPROC)();
-
-inline FARPROC ConvertClassProcToFarproc(CLASSPROC val)
-{
-    return *reinterpret_cast<FARPROC*>(&val);
-}
-
-
 class HookData
 {
-    BYTE data[5];
+    BYTE data[14];
     FARPROC func;
     FARPROC hookFunc;
     bool bHooked;
+    bool b64bitJump;
 
 public:
-    inline HookData() : bHooked(false), func(NULL), hookFunc(NULL) {}
+    inline HookData() : bHooked(false), func(NULL), hookFunc(NULL), b64bitJump(false) {}
 
     inline bool Hook(FARPROC funcIn, FARPROC hookFuncIn)
     {
@@ -78,50 +74,71 @@ public:
                     return true;
                 }
             }
-            else
-                Unhook();
+
+            Unhook();
         }
 
         func = funcIn;
         hookFunc = hookFuncIn;
 
         DWORD oldProtect;
-        if(!VirtualProtect((LPVOID)func, 5, PAGE_EXECUTE_READWRITE, &oldProtect))
+        if(!VirtualProtect((LPVOID)func, 14, PAGE_EXECUTE_READWRITE, &oldProtect))
             return false;
 
-        memcpy(data, (const void*)func, 5);
-        VirtualProtect((LPVOID)func, 5, oldProtect, &oldProtect);
+        memcpy(data, (const void*)func, 14);
+        //VirtualProtect((LPVOID)func, 14, oldProtect, &oldProtect);
 
         return true;
     }
 
     inline void Rehook()
     {
-        if(bHooked)
+        if(bHooked || !func)
             return;
 
+        UPARAM startAddr = UPARAM(func);
+        UPARAM targetAddr = UPARAM(hookFunc);
+        UPARAM offset = targetAddr - (startAddr+5);
+
         DWORD oldProtect;
-        VirtualProtect((LPVOID)func, 5, PAGE_READWRITE, &oldProtect);
 
-        DWORD offset = DWORD(UPARAM(hookFunc) - (UPARAM(func)+5));
+#ifdef _WIN64
+        b64bitJump = (offset > 0x7fff0000);
 
-        LPBYTE addrData = (LPBYTE)func;
-        *addrData = 0xE9;
-        *(DWORD*)(addrData+1) = offset;
-        VirtualProtect((LPVOID)func, 5, oldProtect, &oldProtect);
+        if(b64bitJump)
+        {
+            LPBYTE addrData = (LPBYTE)func;
+            VirtualProtect((LPVOID)func, 14, PAGE_EXECUTE_READWRITE, &oldProtect);
+            *(addrData++) = 0xFF;
+            *(addrData++) = 0x25;
+            *((LPDWORD)(addrData)) = 0;
+            *((unsigned __int64*)(addrData+4)) = targetAddr;
+            //VirtualProtect((LPVOID)func, 14, oldProtect, &oldProtect);
+        }
+        else
+#endif
+        {
+            VirtualProtect((LPVOID)func, 5, PAGE_EXECUTE_READWRITE, &oldProtect);
+
+            LPBYTE addrData = (LPBYTE)func;
+            *addrData = 0xE9;
+            *(DWORD*)(addrData+1) = DWORD(offset);
+            //VirtualProtect((LPVOID)func, 5, oldProtect, &oldProtect);
+        }
 
         bHooked = true;
     }
 
     inline void Unhook()
     {
-        if(!bHooked)
+        if(!bHooked || !func)
             return;
 
+        UINT count = b64bitJump ? 14 : 5;
         DWORD oldProtect;
-        VirtualProtect((LPVOID)func, 5, PAGE_EXECUTE_READWRITE, &oldProtect);
-        memcpy((void*)func, data, 5);
-        VirtualProtect((LPVOID)func, 5, oldProtect, &oldProtect);
+        VirtualProtect((LPVOID)func, count, PAGE_EXECUTE_READWRITE, &oldProtect);
+        memcpy((void*)func, data, count);
+        //VirtualProtect((LPVOID)func, count, oldProtect, &oldProtect);
 
         bHooked = false;
     }
@@ -143,7 +160,7 @@ inline void SetVTable(LPVOID ptr, UINT funcOffset, FARPROC funcAddress)
 
     *(vtable+funcOffset) = (UPARAM)funcAddress;
 
-    VirtualProtect((LPVOID)(vtable+funcOffset), sizeof(UPARAM), oldProtect, &oldProtect);
+    //VirtualProtect((LPVOID)(vtable+funcOffset), sizeof(UPARAM), oldProtect, &oldProtect);
 }
 
 inline void SSECopy(void *lpDest, void *lpSource, UINT size)
@@ -183,14 +200,28 @@ typedef ULONG (WINAPI *RELEASEPROC)(LPVOID);
 enum GSColorFormat {GS_UNKNOWNFORMAT, GS_ALPHA, GS_GRAYSCALE, GS_RGB, GS_RGBA, GS_BGR, GS_BGRA, GS_RGBA16F, GS_RGBA32F, GS_B5G5R5A1, GS_B5G6R5, GS_R10G10B10A2, GS_DXT1, GS_DXT3, GS_DXT5};
 
 extern HWND hwndSender, hwndReceiver;
+extern HINSTANCE hinstMain;
 extern HANDLE textureMutexes[2];
 extern bool bCapturing;
+extern bool bStopRequested;
 extern bool bTargetAcquired;
 
 extern HANDLE hFileMap;
 extern LPBYTE lpSharedMemory;
 
-UINT InitializeSharedMemory(UINT textureSize, DWORD *totalSize, MemoryCopyData **copyData, LPBYTE *textureBuffers);
+extern fstream logOutput;
+
+void WINAPI OSInitializeTimer();
+LONGLONG WINAPI OSGetTimeMicroseconds();
+
+HANDLE WINAPI OSCreateMutex();
+void   WINAPI OSEnterMutex(HANDLE hMutex);
+BOOL   WINAPI OSTryEnterMutex(HANDLE hMutex);
+void   WINAPI OSLeaveMutex(HANDLE hMutex);
+void   WINAPI OSCloseMutex(HANDLE hMutex);
+
+UINT InitializeSharedMemoryCPUCapture(UINT textureSize, DWORD *totalSize, MemoryCopyData **copyData, LPBYTE *textureBuffers);
+UINT InitializeSharedMemoryGPUCapture(SharedTexData **texData);
 void DestroySharedMemory();
 
 //memory capture APIs
@@ -213,3 +244,4 @@ void FreeD3D9ExCapture();
 void FreeD3D101Capture();
 void FreeD3D11Capture();
 
+void QuickLog(LPCSTR lpText);

@@ -106,13 +106,64 @@ void LogSystemStats()
     LogVideoCardStats();
 }
 
+void ConvertPre445aConfig(CTSTR lpConfig)
+{
+    ConfigFile config;
+    if(config.Open(lpConfig))
+    {
+        if(config.HasKey(TEXT("Publish"), TEXT("Server")))
+        {
+            if(config.GetInt(TEXT("Publish"), TEXT("Service")) == 0)
+            {
+                String strServer    = config.GetString(TEXT("Publish"), TEXT("Server"));
+                String strChannel   = config.GetString(TEXT("Publish"), TEXT("Channel"));
+
+                String strRTMPURL;
+                strRTMPURL << TEXT("rtmp://") << strServer << TEXT("/") << strChannel;
+
+                config.SetString(TEXT("Publish"), TEXT("URL"), strRTMPURL);
+            }
+            else
+            {
+                String strServer = config.GetString(TEXT("Publish"), TEXT("Server"));
+
+                config.SetString(TEXT("Publish"), TEXT("URL"), strServer);
+            }
+        }
+    }
+}
+
 
 void SetupIni()
 {
     //first, find out which profile we're using
 
     String strProfile = GlobalConfig->GetString(TEXT("General"), TEXT("Profile"));
+    DWORD lastVersion = GlobalConfig->GetInt(TEXT("General"), TEXT("LastAppVersion"));
     String strIni;
+
+    //--------------------------------------------
+    // 0.445a fix (change server/channel to URL)
+
+    if(lastVersion < 0x445)
+    {
+        OSFindData ofd;
+
+        String strIniPath;
+        strIniPath << lpAppDataPath << TEXT("\\profiles\\");
+        HANDLE hFind = OSFindFirstFile(strIniPath + TEXT("*.ini"), ofd);
+        if(hFind)
+        {
+            do
+            {
+                if(ofd.bDirectory) continue;
+                ConvertPre445aConfig(strIniPath + ofd.fileName);
+
+            } while(OSFindNextFile(hFind, ofd));
+
+            OSFindClose(hFind);
+        }
+    }
 
     //--------------------------------------------
     // try to find and open the file, otherwise use the first one available
@@ -133,7 +184,7 @@ void SetupIni()
         HANDLE hFind = OSFindFirstFile(strIni, ofd);
         if(hFind)
         {
-            do 
+            do
             {
                 if(ofd.bDirectory) continue;
 
@@ -225,6 +276,15 @@ void LoadGlobalIni()
     }
 }
 
+void WINAPI ProcessEvents()
+{
+    MSG msg;
+    while(PeekMessage(&msg, NULL, 0, 0, 1))
+    {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+}
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
@@ -244,14 +304,15 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     hinstMain = hInstance;
 
+    PVOID vectoredHandler;
+    vectoredHandler = AddVectoredExceptionHandler(0, OBSExceptionHandler);
+
     ULONG_PTR gdipToken;
     const Gdiplus::GdiplusStartupInput gdipInput;
     Gdiplus::GdiplusStartup(&gdipToken, &gdipInput, NULL);
 
     if(InitXT(NULL, TEXT("FastAlloc")))
     {
-        traceIn(Main);
-
         InitSockets();
         //CoInitializeEx(NULL, COINIT_MULTITHREADED);
         CoInitialize(0);
@@ -274,6 +335,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             String strLogsPath = strAppDataPath + TEXT("\\logs");
             if(!OSFileExists(strLogsPath) && !OSCreateDirectory(strLogsPath))
                 CrashError(TEXT("Couldn't create directory '%s'"), strLogsPath.Array());
+
+            String strCrashPath = strAppDataPath + TEXT("\\crashDumps");
+            if(!OSFileExists(strCrashPath) && !OSCreateDirectory(strCrashPath))
+                CrashError(TEXT("Couldn't create directory '%s'"), strCrashPath.Array());
 
             String strPluginDataPath = strAppDataPath + TEXT("\\pluginData");
             if(!OSFileExists(strPluginDataPath) && !OSCreateDirectory(strPluginDataPath))
@@ -387,13 +452,13 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             DwmEnableComposition(DWM_EC_ENABLECOMPOSITION);
 
         TerminateSockets();
-
-        traceOutStop;
     }
 
     Gdiplus::GdiplusShutdown(gdipToken);
 
     TerminateXT();
+
+    RemoveVectoredExceptionHandler(vectoredHandler);
 
     //------------------------------------------------------------
 

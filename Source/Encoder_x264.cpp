@@ -82,8 +82,6 @@ class X264Encoder : public VideoEncoder
 public:
     X264Encoder(int fps, int width, int height, int quality, CTSTR preset, bool bUse444, int maxBitRate, int bufferSize)
     {
-        traceIn(X264Encoder::X264Encoder);
-
         fps_ms = 1000/fps;
 
         zero(&paramData, sizeof(paramData));
@@ -148,8 +146,8 @@ public:
                     String strParamName = strParam.GetToken(0, '=');
                     String strParamVal  = strParam.GetTokenOffset(1, '=');
 
-                    if( strParamName.CompareI(TEXT("fps")) || 
-                        strParamName.CompareI(TEXT("force-cfr")))
+                    if( strParamName.CompareI(TEXT("fps")) /*|| 
+                        strParamName.CompareI(TEXT("force-cfr"))*/)
                     {
                         continue;
                     }
@@ -177,24 +175,16 @@ public:
 
         DataPacket packet;
         GetHeaders(packet);
-
-        traceOut;
     }
 
     ~X264Encoder()
     {
-        traceIn(X264Encoder::~X264Encoder);
-
         ClearPackets();
         x264_encoder_close(x264);
-
-        traceOut;
     }
 
     bool Encode(LPVOID picInPtr, List<DataPacket> &packets, List<PacketType> &packetTypes, DWORD outputTimestamp)
     {
-        traceIn(X264Encoder::Encode);
-
         x264_picture_t *picIn = (x264_picture_t*)picInPtr;
 
         x264_nal_t *nalOut;
@@ -209,13 +199,13 @@ public:
             return false;
         }
 
-        /*if(!bFirstFrameProcessed && nalNum)
+        if(!bFirstFrameProcessed && nalNum)
         {
             delayTime = -picOut.i_dts;
             bFirstFrameProcessed = true;
-        }*/
+        }
 
-        int timeOffset = int(INT64(picOut.i_pts/*+delayTime*/)-INT64(outputTimestamp));
+        int timeOffset = int(INT64(picOut.i_pts+delayTime)-INT64(outputTimestamp));
         //Log(TEXT("dts: %d, pts: %d, timestamp: %d, offset: %d"), picOut.i_dts, picOut.i_pts, outputTimestamp, timeOffset);
 
         timeOffset = htonl(timeOffset);
@@ -301,14 +291,10 @@ public:
         }
 
         return true;
-
-        traceOut;
     }
 
     void GetHeaders(DataPacket &packet)
     {
-        traceIn(X264Encoder::GetHeaders);
-
         if(!HeaderPacket.Num())
         {
             x264_nal_t *nalOut;
@@ -347,18 +333,12 @@ public:
 
         packet.lpPacket = HeaderPacket.Array();
         packet.size     = HeaderPacket.Num();
-
-        traceOut;
     }
 
     void GetSEI(DataPacket &packet)
     {
-        traceIn(X264Encoder::GetHeaders);
-
         packet.lpPacket = SEIPacket.Array();
         packet.size     = SEIPacket.Num();
-
-        traceOut;
     }
 
     int GetBitRate() const {return paramData.rc.i_vbv_max_bitrate;}

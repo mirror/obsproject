@@ -27,11 +27,21 @@ class GraphicsCaptureSource : public ImageSource
     XElement *data;
 
     String strWindowClass;
-    HWND hwndTarget, hwndSender, hwndReceiver;
-    bool bCapturing, bErrorAcquiring, bFlip, bStretch;
+    HWND hwndTarget, hwndSender, hwndReceiver, hwndCapture;
+    bool bCapturing, bErrorAcquiring, bFlip, bStretch, bCaptureMouse;
+    UINT captureWaitCount;
     DWORD targetProcessID;
     HANDLE hProcess;
     UINT warningID;
+
+    POINT cursorPos;
+    int xHotspot, yHotspot;
+    bool bMouseCaptured, bMouseDown;
+    HCURSOR hCurrentCursor;
+    Shader *invertShader;
+    Texture *cursorTexture;
+
+    float captureCheckInterval;
 
     void NewCapture(LPVOID address);
     void EndCapture();
@@ -47,7 +57,7 @@ public:
     void BeginScene();
     void EndScene();
 
-    void Preprocess();
+    void Tick(float fSeconds);
     void Render(const Vect2 &pos, const Vect2 &size);
     Vect2 GetSize() const;
 

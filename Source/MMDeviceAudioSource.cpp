@@ -67,8 +67,6 @@ public:
 
     ~MMDeviceAudioSource()
     {
-        traceIn(MMDeviceAudioSource::~MMDeviceAudioSource);
-
         StopCapture();
 
         SafeRelease(mmCapture);
@@ -78,8 +76,6 @@ public:
 
         if(bResample)
             src_delete(resampler);
-
-        traceOut;
     }
 
     virtual void StartCapture();
@@ -109,8 +105,6 @@ AudioSource* CreateAudioSource(bool bMic, CTSTR lpID)
 
 bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
 {
-    traceIn(MMDeviceAudioSource::Initialize);
-
     const CLSID CLSID_MMDeviceEnumerator = __uuidof(MMDeviceEnumerator);
     const IID IID_IMMDeviceEnumerator    = __uuidof(IMMDeviceEnumerator);
     const IID IID_IAudioClient           = __uuidof(IAudioClient);
@@ -120,7 +114,7 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
     err = CoCreateInstance(CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL, IID_IMMDeviceEnumerator, (void**)&mmEnumerator);
     if(FAILED(err))
     {
-        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IMMDeviceEnumerator"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IMMDeviceEnumerator = %08lX"), (BOOL)bMic, err);
         return false;
     }
 
@@ -131,14 +125,14 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
 
     if(FAILED(err))
     {
-        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IMMDevice"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IMMDevice = %08lX"), (BOOL)bMic, err);
         return false;
     }
 
     err = mmDevice->Activate(IID_IAudioClient, CLSCTX_ALL, NULL, (void**)&mmClient);
     if(FAILED(err))
     {
-        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IAudioClient"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not create IAudioClient = %08lX"), (BOOL)bMic, err);
         return false;
     }
 
@@ -146,7 +140,7 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
     err = mmClient->GetMixFormat(&pwfx);
     if(FAILED(err))
     {
-        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not get mix format from audio client"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not get mix format from audio client = %08lX"), (BOOL)bMic, err);
         return false;
     }
 
@@ -184,14 +178,14 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
     err = mmClient->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, ConvertMSTo100NanoSec(5000), 0, pwfx, NULL);
     if(FAILED(err))
     {
-        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not initialize audio client"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not initialize audio client, result = %08lX"), (BOOL)bMic, err);
         return false;
     }
 
     err = mmClient->GetService(IID_IAudioCaptureClient, (void**)&mmCapture);
     if(FAILED(err))
     {
-        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not get audio capture client"), (BOOL)bMic);
+        AppWarning(TEXT("MMDeviceAudioSource::Initialize(%d): Could not get audio capture client = %08lX"), (BOOL)bMic, err);
         return false;
     }
 
@@ -265,28 +259,18 @@ bool MMDeviceAudioSource::Initialize(bool bMic, CTSTR lpID)
     }
 
     return true;
-
-    traceOut;
 }
 
 void MMDeviceAudioSource::StartCapture()
 {
-    traceIn(MMDeviceAudioSource::StartCapture);
-
     if(mmClient)
         mmClient->Start();
-
-    traceOut;
 }
 
 void MMDeviceAudioSource::StopCapture()
 {
-    traceIn(MMDeviceAudioSource::StopCapture);
-
     if(mmClient)
         mmClient->Stop();
-
-    traceOut;
 }
 
 String MMDeviceAudioSource::GetDeviceName()
@@ -323,8 +307,6 @@ const float lowFreqMix  = 3.16227766f*dbMinus3;
 
 UINT MMDeviceAudioSource::GetNextBuffer()
 {
-    traceIn(MMDeviceAudioSource::GetBuffer);
-
     if(bClearSegment)
     {
         receiveBuffer.RemoveRange(0, (441*2));
@@ -338,7 +320,7 @@ UINT MMDeviceAudioSource::GetNextBuffer()
     HRESULT err = mmCapture->GetNextPacketSize(&captureSize);
     if(FAILED(err))
     {
-        AppWarning(TEXT("MMDeviceAudioSource::GetBuffer: GetNextPacketSize failed"));
+        RUNONCE AppWarning(TEXT("MMDeviceAudioSource::GetBuffer: GetNextPacketSize failed"));
         return NoAudioAvailable;
     }
 
@@ -354,7 +336,7 @@ UINT MMDeviceAudioSource::GetNextBuffer()
         err = mmCapture->GetBuffer(&captureBuffer, &numAudioFrames, &dwFlags, NULL, &qpcTimestamp);
         if(FAILED(err))
         {
-            AppWarning(TEXT("MMDeviceAudioSource::GetBuffer: GetBuffer failed"));
+            RUNONCE AppWarning(TEXT("MMDeviceAudioSource::GetBuffer: GetBuffer failed"));
             MakeErrorBuffer();
             return AudioAvailable;
         }
@@ -612,14 +594,14 @@ UINT MMDeviceAudioSource::GetNextBuffer()
             int err = src_process(resampler, &data);
             if(err)
             {
-                AppWarning(TEXT("Was unable to resample audio"));
+                RUNONCE AppWarning(TEXT("Was unable to resample audio"));
                 MakeErrorBuffer();
                 return AudioAvailable;
             }
 
             if(data.input_frames_used != numAudioFrames)
             {
-                AppWarning(TEXT("Failed to downsample buffer completely, which shouldn't actually happen because it should be using 10ms of samples"));
+                RUNONCE AppWarning(TEXT("Failed to downsample buffer completely, which shouldn't actually happen because it should be using 10ms of samples"));
                 MakeErrorBuffer();
                 return AudioAvailable;
             }
@@ -633,8 +615,6 @@ UINT MMDeviceAudioSource::GetNextBuffer()
     }
 
     return NoAudioAvailable;
-
-    traceOut;
 }
 
 bool MMDeviceAudioSource::GetBuffer(float **buffer, UINT *numFrames, DWORD &timestamp)

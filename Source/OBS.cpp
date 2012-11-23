@@ -56,6 +56,7 @@ ImageSource* STDCALL CreateGlobalSource(XElement *data);
 
 //NetworkStream* CreateRTMPServer();
 NetworkStream* CreateRTMPPublisher(String &failReason, bool &bCanRetry);
+NetworkStream* CreateDelayedPublisher(DWORD delayTime);
 NetworkStream* CreateBandwidthAnalyzer();
 
 void StartBlankSoundPlayback();
@@ -235,12 +236,13 @@ void OBS::ResizeWindow(bool bRedrawRenderFrame)
 
     SendMessage(hwndTemp, WM_SIZE, SIZE_RESTORED, 0);
 
-    int parts[4];
-    parts[3] = -1;
-    parts[2] = clientWidth-100;
-    parts[1] = parts[2]-60;
-    parts[0] = parts[1]-150;
-    SendMessage(hwndTemp, SB_SETPARTS, 4, (LPARAM)parts);
+    int parts[5];
+    parts[4] = -1;
+    parts[3] = clientWidth-100;
+    parts[2] = parts[3]-60;
+    parts[1] = parts[2]-150;
+    parts[0] = parts[1]-80;
+    SendMessage(hwndTemp, SB_SETPARTS, 5, (LPARAM)parts);
 
     int resetXPos = xStart+listControlWidth*2;
 
@@ -433,8 +435,6 @@ public:
 
 OBS::OBS()
 {
-    traceIn(OBS::OBS);
-
     App = this;
 
     __cpuid(cpuInfo, 1);
@@ -849,15 +849,11 @@ OBS::OBS()
     hHotkeyThread = OSCreateThread((XTHREAD)HotkeyThread, NULL);
     
     bRenderViewEnabled = true;
-
-    traceOut;
 }
 
 
 OBS::~OBS()
 {
-    traceIn(OBS::~OBS);
-
     Stop();
 
     bShuttingDown = true;
@@ -908,20 +904,14 @@ OBS::~OBS()
         OSCloseMutex(hInfoMutex);
     if(hHotkeyMutex)
         OSCloseMutex(hHotkeyMutex);
-
-    traceOut;
 }
 
 void OBS::ToggleCapturing()
 {
-    traceIn(OBS::ToggleCapturing);
-
     if(!bRunning)
         Start();
     else
         Stop();
-
-    traceOut;
 }
 
 void STDCALL SceneHotkey(DWORD hotkey, UPARAM param, bool bDown)
@@ -1048,8 +1038,6 @@ HFONT OBS::GetFont(CTSTR lpFontFace, int fontSize, int fontWeight)
 
 ID3D10Blob* CompileShader(CTSTR lpShader, LPCSTR lpTarget)
 {
-    traceIn(CompileShader);
-
     ID3D10Blob *errorMessages = NULL, *shaderBlob = NULL;
 
     HRESULT err = D3DX10CompileFromFile(lpShader, NULL, NULL, "main", lpTarget, D3D10_SHADER_OPTIMIZATION_LEVEL3, 0, NULL, &shaderBlob, &errorMessages, NULL);
@@ -1070,14 +1058,10 @@ ID3D10Blob* CompileShader(CTSTR lpShader, LPCSTR lpTarget)
     }
 
     return shaderBlob;
-
-    traceOut;
 }
 
 void OBS::Start()
 {
-    traceIn(OBS::Start);
-
     if(bRunning) return;
 
     //-------------------------------------------------------------
@@ -1095,7 +1079,17 @@ void OBS::Start()
 
     //-------------------------------------------------------------
 
+    if (OSIncompatibleModulesLoaded())
+    {
+        MessageBox(hwndMain, Str("IncompatibleModules"), NULL, MB_ICONERROR);
+        Log(TEXT("Incompatible modules detected."));
+        return;
+    }
+
+    //-------------------------------------------------------------
+
     int networkMode = AppConfig->GetInt(TEXT("Publish"), TEXT("Mode"), 2);
+    DWORD delayTime = (DWORD)AppConfig->GetInt(TEXT("Publish"), TEXT("Delay"));
 
     bool bCanRetry = false;
     String strError;
@@ -1106,7 +1100,7 @@ void OBS::Start()
     {
         switch(networkMode)
         {
-            case 0: network = CreateRTMPPublisher(strError, bCanRetry); break;
+            case 0: network = (delayTime > 0) ? CreateDelayedPublisher(delayTime) : CreateRTMPPublisher(strError, bCanRetry); break;
             case 1: network = CreateNullNetwork(); break;
         }
     }
@@ -1391,8 +1385,6 @@ void OBS::Start()
     //-------------------------------------------------------------
 
     SystemParametersInfo(SPI_SETSCREENSAVEACTIVE, 0, 0, 0);
-
-    traceOut;
 }
 
 StatusBarDrawData statusBarData;
@@ -1404,6 +1396,7 @@ void OBS::ClearStatusBar()
     PostMessage(hwndStatusBar, SB_SETTEXT, 1, NULL);
     PostMessage(hwndStatusBar, SB_SETTEXT, 2, NULL);
     PostMessage(hwndStatusBar, SB_SETTEXT, 3, NULL);
+    PostMessage(hwndStatusBar, SB_SETTEXT, 4, NULL);
 }
 
 void OBS::SetStatusBarData()
@@ -1415,6 +1408,7 @@ void OBS::SetStatusBarData()
     SendMessage(hwndStatusBar, SB_SETTEXT, 1 | SBT_OWNERDRAW, NULL);
     SendMessage(hwndStatusBar, SB_SETTEXT, 2 | SBT_OWNERDRAW, NULL);
     SendMessage(hwndStatusBar, SB_SETTEXT, 3 | SBT_OWNERDRAW, NULL);
+    SendMessage(hwndStatusBar, SB_SETTEXT, 4 | SBT_OWNERDRAW, NULL);
 
     SendMessage(hwndStatusBar, WM_SETREDRAW, 1, 0);
     InvalidateRect(hwndStatusBar, NULL, FALSE);
@@ -1447,7 +1441,7 @@ void OBS::DrawStatusBar(DRAWITEMSTRUCT &dis)
 
     //--------------------------------
 
-    if(dis.itemID == 3)
+    if(dis.itemID == 4)
     {
         DWORD green = 0xFF, red = 0xFF;
 
@@ -1495,8 +1489,20 @@ void OBS::DrawStatusBar(DRAWITEMSTRUCT &dis)
         switch(dis.itemID)
         {
             case 0: strOutString << App->GetMostImportantInfo(); break;
-            case 1: strOutString << Str("MainWindow.DroppedFrames") << TEXT(" ") << IntString(App->curFramesDropped); break;
-            case 2: strOutString << TEXT("FPS: ") << IntString(App->captureFPS); break;
+            case 1:
+                {
+                    DWORD streamTimeSecondsTotal = App->totalStreamTime/1000;
+                    DWORD streamTimeMinutesTotal = streamTimeSecondsTotal/60;
+                    DWORD streamTimeSeconds = streamTimeSecondsTotal%60;
+
+                    DWORD streamTimeHours = streamTimeMinutesTotal/60;
+                    DWORD streamTimeMinutes = streamTimeMinutesTotal%60;
+
+                    strOutString = FormattedString(TEXT("%u:%02u:%02u"), streamTimeHours, streamTimeMinutes, streamTimeSeconds);
+                }
+                break;
+            case 2: strOutString << Str("MainWindow.DroppedFrames") << TEXT(" ") << IntString(App->curFramesDropped); break;
+            case 3: strOutString << TEXT("FPS: ") << IntString(App->captureFPS); break;
         }
 
         if(strOutString.IsValid())
@@ -1516,8 +1522,6 @@ void OBS::DrawStatusBar(DRAWITEMSTRUCT &dis)
 
 void OBS::Stop()
 {
-    traceIn(OBS::Stop);
-
     if(!bRunning) return;
 
     bRunning = false;
@@ -1552,6 +1556,10 @@ void OBS::Stop()
 
     //-------------------------------------------------------------
 
+    StopBlankSoundPlayback();
+
+    //-------------------------------------------------------------
+
     delete network;
 
     delete micAudio;
@@ -1568,10 +1576,6 @@ void OBS::Stop()
     fileStream = NULL;
     audioEncoder = NULL;
     videoEncoder = NULL;
-
-    //-------------------------------------------------------------
-
-    StopBlankSoundPlayback();
 
     //-------------------------------------------------------------
 
@@ -1686,8 +1690,6 @@ void OBS::Stop()
     SystemParametersInfo(SPI_SETSCREENSAVEACTIVE, 1, 0, 0);
 
     bTestStream = false;
-
-    traceOut;
 }
 
 inline void MultiplyAudioBuffer(float *buffer, int totalFloats, float mulVal)
@@ -1714,18 +1716,6 @@ inline void MultiplyAudioBuffer(float *buffer, int totalFloats, float mulVal)
 
 DWORD STDCALL OBS::MainCaptureThread(LPVOID lpUnused)
 {
-    /*SYSTEM_INFO si;
-    GetSystemInfo(&si);
-
-    DWORD lastCoreIDMask = 1<<(si.dwNumberOfProcessors-1);
-
-    DWORD_PTR retVal = SetThreadAffinityMask(GetCurrentThread(), lastCoreIDMask);
-    if(retVal == 0)
-    {
-        int lastError = GetLastError();
-        nop();
-    }*/
-
     App->MainCaptureLoop();
     return 0;
 }
@@ -1762,8 +1752,6 @@ DWORD STDCALL Convert444Thread(Convert444Data *data)
 
 void OBS::MainCaptureLoop()
 {
-    traceIn(OBS::MainCaptureLoop);
-
     int curRenderTarget = 0, curYUVTexture = 0, curCopyTexture = 0;
     int copyWait = NUM_RENDER_BUFFERS-1;
     UINT curStreamTime = 0, firstFrameTime = OSGetTime(), lastStreamTime = 0;
@@ -1781,6 +1769,9 @@ void OBS::MainCaptureLoop()
     int numTotalFrames = 0;
 
     LPVOID nullBuff = NULL;
+
+    DWORD streamTimeStart = OSGetTime();
+    totalStreamTime = 0;
 
     x264_picture_t outPics[2];
     x264_picture_init(&outPics[0]);
@@ -1868,6 +1859,8 @@ void OBS::MainCaptureLoop()
     while(bRunning)
     {
         DWORD renderStartTime = OSGetTime();
+
+        totalStreamTime = renderStartTime-streamTimeStart;
 
         DWORD frameTimeAdjust = frameTime;
         fpsTimeAdjust += fpsTimeNumerator;
@@ -2076,7 +2069,7 @@ void OBS::MainCaptureLoop()
 
         //------------------------------------
 
-        //if(bRenderView && !copyWait)
+        if(bRenderView && !copyWait)
             static_cast<D3D10System*>(GS)->swap->Present(0, 0);
 
         OSLeaveMutex(hSceneMutex);
@@ -2213,21 +2206,6 @@ void OBS::MainCaptureLoop()
 
                         if(curPTSVal != 0)
                         {
-                            /*int toleranceVal = int(lastPTSVal+frameTime);
-                            int toleranceOffset = (int(curPTSVal)-toleranceVal);
-                            int halfFrameTime = int(frameTime/2);
-
-                            if(toleranceOffset > halfFrameTime)
-                                curPTSVal = DWORD(toleranceVal+(toleranceOffset-halfFrameTime));
-                            else if(toleranceOffset < -halfFrameTime)
-                                curPTSVal = DWORD(toleranceVal+(toleranceOffset+halfFrameTime));
-                            else
-                                curPTSVal = DWORD(toleranceVal);*/
-
-                            //this turned out to be much better than the previous way I was doing it.
-                            //if the FPS is set to about the same as the capture FPS, this works pretty much flawlessly.
-                            //100% calculated timestamps that are almost fully accurate with no CPU timers involved,
-                            //while still fully allowing any potential unexpected frame variability.
                             curPTSVal = lastPTSVal+frameTimeAdjust;
                             if(curPTSVal < lastUnmodifiedPTSVal)
                                 curPTSVal = lastUnmodifiedPTSVal;
@@ -2406,8 +2384,6 @@ void OBS::MainCaptureLoop()
     Free(convertInfo);
 
     Log(TEXT("Total frames rendered: %d, number of frames that lagged: %d (%0.2f%%) (it's okay for some frames to lag)"), numTotalFrames, numLongFrames, (double(numLongFrames)/double(numTotalFrames))*100.0);
-
-    traceOutStop;
 }
 
 //only get audio if all audio sources have 441 frames pending
@@ -2431,8 +2407,6 @@ bool OBS::QueryNewAudio()
 
 void OBS::MainAudioLoop()
 {
-    traceIn(OBS::MainAudioLoop);
-
     bPushToTalkOn = false;
 
     UINT curAudioFrame = 0;
@@ -2586,8 +2560,6 @@ void OBS::MainAudioLoop()
 
     for(UINT i=0; i<pendingAudioFrames.Num(); i++)
         pendingAudioFrames[i].audioData.Clear();
-
-    traceOutStop;
 }
 
 void OBS::SelectSources()

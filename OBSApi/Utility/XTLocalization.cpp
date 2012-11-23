@@ -230,8 +230,6 @@ void LocaleStringLookup::RemoveLookup(CTSTR lookupVal, StringLookupNode *node)
 //ugh yet more string parsing, you think you escape it for one minute and then bam!  you discover yet more string parsing code needs to be written
 BOOL LocaleStringLookup::LoadStringFile(CTSTR lpFile, bool bClear)
 {
-    traceIn(LocaleStringLookup::LoadStringFile);
-
     if(bClear)
     {
         cache.Clear();
@@ -308,8 +306,6 @@ BOOL LocaleStringLookup::LoadStringFile(CTSTR lpFile, bool bClear)
     //------------------------
 
     return TRUE;
-
-    traceOut;
 }
 
 
@@ -355,8 +351,6 @@ void LocaleStringLookup::AddLookupString(CTSTR lookupVal, CTSTR lpVal)
 
 CTSTR LocaleStringLookup::LookupString(CTSTR lookupVal)
 {
-    traceIn(LocaleStringLookup::LookupString);
-
     StringLookupNode *child = FindNode(lookupVal);
     if(!child)
         return TEXT("(string not found)");
@@ -365,8 +359,6 @@ CTSTR LocaleStringLookup::LookupString(CTSTR lookupVal)
         return TEXT("(lookup error)");
 
     return child->leaf->strValue;
-
-    traceOut;
 }
 
 
@@ -541,7 +533,7 @@ LocaleNativeName nativeNames[] =
     {TEXT("tr"), TEXT("Türkçe")},
     {TEXT("ts"), TEXT("Xitsonga")},
     {TEXT("tt"), TEXT("татарча, tatarça, تاتارچا")},
-    {TEXT("tw"), TEXT("Twi")},
+    {TEXT("tw"), TEXT("正體中文")},
     {TEXT("ty"), TEXT("Reo Mā`ohi")},
     {TEXT("ug"), TEXT("ئۇيغۇرچە")},
     {TEXT("uk"), TEXT("українська")},
@@ -556,11 +548,11 @@ LocaleNativeName nativeNames[] =
     {TEXT("yi"), TEXT("ייִדיש")},
     {TEXT("yo"), TEXT("Yorùbá")},
     {TEXT("za"), TEXT("Saɯ cueŋ")},
-    {TEXT("zh"), TEXT("中文")},
+    {TEXT("zh"), TEXT("简体中文")},
     {TEXT("zu"), TEXT("isiZulu")},
     {NULL, NULL}
 };
-
+//zh_cn = "简体中文", zh_tw "正體中文"
 
 LocaleNativeName* STDCALL GetLocaleNativeName(CTSTR lpCode)
 {

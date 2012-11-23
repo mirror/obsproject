@@ -446,6 +446,8 @@ class OBS
     DWORD curFramesDropped;
     double curStrain;
 
+    DWORD totalStreamTime;
+
     bool        bUseSyncFix;
     List<UINT>  bufferedTimes;
 
@@ -668,3 +670,6 @@ public:
 };
 
 ID3D10Blob* CompileShader(CTSTR lpShader, LPCSTR lpTarget);
+
+LONG CALLBACK OBSExceptionHandler (PEXCEPTION_POINTERS exceptionInfo);
+

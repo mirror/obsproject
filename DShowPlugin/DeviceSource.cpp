@@ -24,8 +24,6 @@ DWORD STDCALL PackPlanarThread(ConvertData *data);
 
 bool DeviceSource::Init(XElement *data)
 {
-    traceIn(DeviceSource::Init);
-
     HRESULT err;
     err = CoCreateInstance(CLSID_FilterGraph, NULL, CLSCTX_INPROC, (REFIID)IID_IFilterGraph, (void**)&graph);
     if(FAILED(err))
@@ -64,14 +62,10 @@ bool DeviceSource::Init(XElement *data)
     //    return false;
 
     return true;
-
-    traceOut;
 }
 
 DeviceSource::~DeviceSource()
 {
-    traceIn(DeviceSource::~DeviceSource);
-
     Stop();
     UnloadFilters();
 
@@ -86,8 +80,6 @@ DeviceSource::~DeviceSource()
 
     if(hSampleMutex)
         OSCloseMutex(hSampleMutex);
-
-    traceOut;
 }
 
 String DeviceSource::ChooseShader()
@@ -131,8 +123,6 @@ const float yuvMat[16] = { 0.257f,  0.504f,  0.098f, 0.0625f,
 
 bool DeviceSource::LoadFilters()
 {
-    traceIn(DeviceSource::LoadFilters);
-
     if(bCapturing || bFiltersLoaded)
         return false;
 
@@ -154,6 +144,9 @@ bool DeviceSource::LoadFilters()
     strDevice = data->GetString(TEXT("device"));
 
     bFlipVertical = data->GetInt(TEXT("flipImage")) != 0;
+    bFlipHorizontal = data->GetInt(TEXT("flipImageHorizontal")) != 0;
+
+    opacity = data->GetInt(TEXT("opacity"), 100);
 
     //------------------------------------------------
 
@@ -208,7 +201,13 @@ bool DeviceSource::LoadFilters()
     else
     {
         SIZE size;
-        GetClosestResolution(outputList, size, frameInterval);
+        if (!GetClosestResolution(outputList, size, frameInterval))
+        {
+            AppWarning(TEXT("DShowPlugin: Unable to find appropriate resolution"));
+            renderCX = renderCY = 64;
+            goto cleanFinish;
+        }
+
         renderCX = size.cx;
         renderCY = size.cy;
     }
@@ -255,7 +254,8 @@ bool DeviceSource::LoadFilters()
     {
         VIDEOINFOHEADER *pVih = reinterpret_cast<VIDEOINFOHEADER*>(bestOutput->mediaType->pbFormat);
 
-        String strTest = FormattedString(TEXT("   chosen type: %s, usingFourCC: %s, res: %ux%u - %ux%u, fps: %g-%g"),
+        String strTest = FormattedString(TEXT("   device: %s, chosen type: %s, usingFourCC: %s, res: %ux%u - %ux%u, fps: %g-%g"),
+            strDevice.Array(),
             EnumToName[(int)bestOutput->videoType],
             bestOutput->bUsingFourCC ? TEXT("true") : TEXT("false"),
             bestOutput->minCX, bestOutput->minCY, bestOutput->maxCX, bestOutput->maxCY,
@@ -452,14 +452,10 @@ cleanFinish:
 
     bFiltersLoaded = bSucceeded;
     return bSucceeded;
-
-    traceOut;
 }
 
 void DeviceSource::UnloadFilters()
 {
-    traceIn(DeviceSource::UnloadFilters);
-
     if(texture)
     {
         delete texture;
@@ -517,14 +513,10 @@ void DeviceSource::UnloadFilters()
     }
 
     SafeRelease(control);
-
-    traceOut;
 }
 
 void DeviceSource::Start()
 {
-    traceIn(DeviceSource::Start);
-
     if(bCapturing || !control)
         return;
 
@@ -536,40 +528,26 @@ void DeviceSource::Start()
     }
 
     bCapturing = true;
-
-    traceOut;
 }
 
 void DeviceSource::Stop()
 {
-    traceIn(DeviceSource::Stop);
-
     if(!bCapturing)
         return;
 
     bCapturing = false;
     control->Stop();
     FlushSamples();
-
-    traceOut;
 }
 
 void DeviceSource::BeginScene()
 {
-    traceIn(DeviceSource::BeginScene);
-
     Start();
-
-    traceOut;
 }
 
 void DeviceSource::EndScene()
 {
-    traceIn(DeviceSource::EndScene);
-
     Stop();
-
-    traceOut;
 }
 
 void DeviceSource::Receive(IMediaSample *sample)
@@ -605,8 +583,6 @@ DWORD STDCALL PackPlanarThread(ConvertData *data)
 
 void DeviceSource::Preprocess()
 {
-    traceIn(DeviceSource::Preprocess);
-
     if(!bCapturing)
         return;
 
@@ -720,14 +696,10 @@ void DeviceSource::Preprocess()
 
         lastSample->Release();
     }
-
-    traceOut;
 }
 
 void DeviceSource::Render(const Vect2 &pos, const Vect2 &size)
 {
-    traceIn(DeviceSource::Render);
-
     if(texture && bReadyToDraw)
     {
         Shader *oldShader = GetCurrentPixelShader();
@@ -757,22 +729,33 @@ void DeviceSource::Render(const Vect2 &pos, const Vect2 &size)
         if(colorType != DeviceOutputType_RGB)
             bFlip = !bFlip;
 
-        if(bFlip)
-            DrawSprite(texture, 0xFFFFFFFF, pos.x, pos.y, pos.x+size.x, pos.y+size.y);
+        float x, x2;
+        if(bFlipHorizontal)
+        {
+            x2 = pos.x;
+            x = x2+size.x;
+        }
         else
-            DrawSprite(texture, 0xFFFFFFFF, pos.x, pos.y+size.y, pos.x+size.x, pos.y);
+        {
+            x = pos.x;
+            x2 = x+size.x;
+        }
+
+        float fOpacity = float(opacity)*0.01f;
+        DWORD opacity255 = DWORD(fOpacity*255.0f);
+
+        if(bFlip)
+            DrawSprite(texture, (opacity255<<24) | 0xFFFFFF, x, pos.y, x2, pos.y+size.y);
+        else
+            DrawSprite(texture, (opacity255<<24) | 0xFFFFFF, x, pos.y+size.y, x2, pos.y);
 
         if(colorConvertShader)
             LoadPixelShader(oldShader);
     }
-
-    traceOut;
 }
 
 void DeviceSource::UpdateSettings()
 {
-    traceIn(DeviceSource::UpdateSettings);
-
     String strNewDevice     = data->GetString(TEXT("device"));
     UINT64 newFrameInterval = data->GetInt(TEXT("frameInterval"));
     UINT newCX              = data->GetInt(TEXT("resolutionWidth"));
@@ -794,8 +777,6 @@ void DeviceSource::UpdateSettings()
 
         API->LeaveSceneMutex();
     }
-
-    traceOut;
 }
 
 void DeviceSource::SetInt(CTSTR lpName, int iVal)
@@ -829,6 +810,10 @@ void DeviceSource::SetInt(CTSTR lpName, int iVal)
         {
             bFlipVertical = iVal != 0;
         }
+        else if(scmpi(lpName, TEXT("flipImageHorizontal")) == 0)
+        {
+            bFlipHorizontal = iVal != 0;
+        }
         else if(scmpi(lpName, TEXT("keyColor")) == 0)
         {
             keyColor = (DWORD)iVal;
@@ -855,6 +840,10 @@ void DeviceSource::SetInt(CTSTR lpName, int iVal)
         else if(scmpi(lpName, TEXT("keySpillReduction")) == 0)
         {
             keySpillReduction = iVal;
+        }
+        else if(scmpi(lpName, TEXT("opacity")) == 0)
+        {
+            opacity = iVal;
         }
     }
 }

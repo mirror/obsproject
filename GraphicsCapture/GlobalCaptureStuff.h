@@ -37,14 +37,22 @@ struct MemoryCopyData
     DWORD   texture1Offset, texture2Offset;
 };
 
+struct SharedTexData
+{
+    UINT    lastRendered;
+    HANDLE  texHandles[2];
+};
+
 struct CaptureInfo
 {
     UINT    captureType;
     DWORD   format;
     UINT    cx, cy;
-    UINT    pitch;
     HWND    hwndSender;
+    HWND    hwndCapture;
     BOOL    bFlip;
+
+    UINT    pitch;
     UINT    mapID;
     DWORD   mapSize;
 };

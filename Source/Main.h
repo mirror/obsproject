@@ -61,8 +61,8 @@ extern ConfigFile   *AppConfig;
 extern OBS          *App;
 extern TCHAR        lpAppDataPath[MAX_PATH];
 
-#define OBS_VERSION             0x000432
-#define OBS_VERSION_STRING_ANSI "Open Broadcaster Software v0.432a"
+#define OBS_VERSION             0x000445
+#define OBS_VERSION_STRING_ANSI "Open Broadcaster Software v0.446a"
 #define OBS_VERSION_STRING      TEXT(OBS_VERSION_STRING_ANSI)
 
 #define OBS_WINDOW_CLASS      TEXT("OBSWindowClass")
@@ -72,6 +72,8 @@ inline UINT ConvertMSTo100NanoSec(UINT ms)
 {
     return ms*1000*10; //1000 microseconds, then 10 "100nanosecond" segments
 }
+
+void WINAPI ProcessEvents();
 
 //-------------------------------------------
 // application headers

@@ -19,6 +19,7 @@
 
 #include "GraphicsCapture.h"
 
+
 BOOL WINAPI InjectLibrary(HANDLE hProcess, CTSTR lpDLL)
 {
     UPARAM procAddress;
@@ -65,7 +66,7 @@ end:
     if(hThread)
         CloseHandle(hThread);
     if(lpStr)
-        VirtualFreeEx(hProcess, lpStr, dwSize, MEM_RELEASE);
+        VirtualFreeEx(hProcess, lpStr, 0, MEM_RELEASE);
 
     if(!bRet)
         SetLastError(lastError);
@@ -107,13 +108,17 @@ LRESULT WINAPI GraphicsCaptureSource::ReceiverWindowProc(HWND hwnd, UINT message
                 if(source)
                     source->NewCapture((LPVOID)lParam);
             }
-            break;
+            return API->GetMaxFPS();
 
         case RECEIVER_ENDCAPTURE:
             {
                 GraphicsCaptureSource *source = (GraphicsCaptureSource*)GetWindowLongPtr(hwnd, 0);
                 if(source)
+                {
+                    API->EnterSceneMutex();
                     source->EndCapture();
+                    API->LeaveSceneMutex();
+                }
             }
             break;
 
@@ -142,20 +147,24 @@ void GraphicsCaptureSource::NewCapture(LPVOID address)
     if(!ReadProcessMemory(hProcess, address, &info, sizeof(info), NULL))
     {
         API->LeaveSceneMutex();
-        AppWarning(TEXT("GraphicsCaptureSource::NewCapture: Could not read capture info from target process"));
+
+        RUNONCE AppWarning(TEXT("GraphicsCaptureSource::NewCapture: Could not read capture info from target process"));
         return;
     }
 
     bFlip = info.bFlip != 0;
 
+    hwndCapture = info.hwndCapture;
+
     if(info.captureType == CAPTURETYPE_MEMORY)
         capture = new MemoryCapture;
-    /*else if(info.captureType == CAPTURETYPE_SHAREDTEX)
-        capture = new SharedTexCapture;*/
+    else if(info.captureType == CAPTURETYPE_SHAREDTEX)
+        capture = new SharedTexCapture;
     else
     {
         API->LeaveSceneMutex();
-        AppWarning(TEXT("GraphicsCaptureSource::NewCapture: wtf, bad data from the target process"));
+
+        RUNONCE AppWarning(TEXT("GraphicsCaptureSource::NewCapture: wtf, bad data from the target process"));
         return;
     }
 
@@ -171,27 +180,34 @@ void GraphicsCaptureSource::NewCapture(LPVOID address)
 
 void GraphicsCaptureSource::EndCapture()
 {
-    API->EnterSceneMutex();
+    if(capture)
+    {
+        capture->Destroy();
+        delete capture;
+        capture = NULL;
+    }
 
-    capture->Destroy();
-    delete capture;
-    capture = NULL;
     bErrorAcquiring = false;
     bCapturing = false;
+    captureCheckInterval = -1.0f;
+    hwndCapture = NULL;
 
     if(warningID)
     {
         API->RemoveStreamInfo(warningID);
         warningID = 0;
     }
-
-    API->LeaveSceneMutex();
 }
 
 bool GraphicsCaptureSource::FindSenderWindow()
 {
     if(hwndSender)
-        return true;
+    {
+        if(!IsWindow(hwndSender))
+            hwndSender = NULL;
+        else
+            return true;
+    }
 
     while(hwndSender = FindWindowEx(NULL, hwndSender, SENDER_WINDOWCLASS, NULL))
     {
@@ -215,6 +231,10 @@ void GraphicsCaptureSource::BeginScene()
         return;
 
     bStretch = data->GetInt(TEXT("stretchImage")) != 0;
+    bCaptureMouse = data->GetInt(TEXT("captureMouse"), 1) != 0;
+
+    if(bCaptureMouse && data->GetInt(TEXT("invertMouse")))
+        invertShader = CreatePixelShaderFromFile(TEXT("shaders\\InvertTexture.pShader"));
 
     hwndReceiver = CreateWindow(RECEIVER_WINDOWCLASS, NULL, 0, 0, 0, 0, 0, 0, 0, hinstMain, this);
 
@@ -260,6 +280,7 @@ void GraphicsCaptureSource::AttemptCapture()
         {
             PostMessage(hwndSender, SENDER_RESTARTCAPTURE, 0, 0);
             bCapturing = true;
+            captureWaitCount = 0;
         }
         else
         {
@@ -271,7 +292,10 @@ void GraphicsCaptureSource::AttemptCapture()
             strDLL << TEXT("\\plugins\\GraphicsCapture\\GraphicsCaptureHook.dll");
 
             if(InjectLibrary(hProcess, strDLL))
+            {
+                captureWaitCount = 0;
                 bCapturing = true;
+            }
             else
             {
                 AppWarning(TEXT("GraphicsCaptureSource::BeginScene: Failed to inject library, GetLastError = %u"), GetLastError());
@@ -320,12 +344,42 @@ void GraphicsCaptureSource::EndScene()
         CloseHandle(hProcess);
         hProcess = NULL;
     }
+
+    if(invertShader)
+    {
+        delete invertShader;
+        invertShader = NULL;
+    }
+
+    if(cursorTexture)
+    {
+        delete cursorTexture;
+        cursorTexture = NULL;
+    }
 }
 
-void GraphicsCaptureSource::Preprocess()
+void GraphicsCaptureSource::Tick(float fSeconds)
 {
+    if(bCapturing && !capture)
+    {
+        if(++captureWaitCount >= API->GetMaxFPS())
+            bCapturing = false;
+    }
+
     if(!bCapturing && !bErrorAcquiring)
-        AttemptCapture();
+    {
+        captureCheckInterval += fSeconds;
+        if(captureCheckInterval >= 3.0f)
+        {
+            AttemptCapture();
+            captureCheckInterval = 0.0f;
+        }
+    }
+    else
+    {
+        if(!FindSenderWindow())
+            EndCapture();
+    }
 }
 
 inline double round(double val)
@@ -343,6 +397,77 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
 {
     if(capture)
     {
+        //----------------------------------------------------------
+        // capture mouse
+
+        bMouseCaptured = false;
+        if(bCaptureMouse)
+        {
+            CURSORINFO ci;
+            zero(&ci, sizeof(ci));
+            ci.cbSize = sizeof(ci);
+
+            if(GetCursorInfo(&ci) && hwndCapture)
+            {
+                mcpy(&cursorPos, &ci.ptScreenPos, sizeof(cursorPos));
+
+                ScreenToClient(hwndCapture, &cursorPos);
+
+                if(ci.flags & CURSOR_SHOWING)
+                {
+                    if(ci.hCursor == hCurrentCursor)
+                        bMouseCaptured = true;
+                    else
+                    {
+                        HICON hIcon = CopyIcon(ci.hCursor);
+
+                        delete cursorTexture;
+                        cursorTexture = NULL;
+
+                        if(hIcon)
+                        {
+                            ICONINFO ii;
+                            if(GetIconInfo(hIcon, &ii))
+                            {
+                                xHotspot = int(ii.xHotspot);
+                                yHotspot = int(ii.yHotspot);
+
+                                BITMAP bitmapInfo;
+                                HBITMAP hBitmap = (ii.hbmColor != NULL) ? ii.hbmColor : ii.hbmMask;
+
+                                if(hBitmap && GetObject(hBitmap, sizeof(BITMAP), &bitmapInfo) != 0)
+                                {
+                                    cursorTexture = CreateGDITexture(32, 32);
+                                    if(cursorTexture)
+                                    {
+                                        HDC hDC;
+                                        if(cursorTexture->GetDC(hDC))
+                                        {
+                                            DrawIcon(hDC, 0, 0, hIcon);
+                                            cursorTexture->ReleaseDC();
+                                        }
+
+                                        bMouseCaptured = true;
+                                    }
+
+                                    DeleteObject(ii.hbmColor);
+                                    DeleteObject(ii.hbmMask);
+                                }
+                            }
+
+                            DestroyIcon(hIcon);
+                        }
+                    }
+                }
+            }
+        }
+
+        //----------------------------------------------------------
+        // game texture
+
+        Vect2 texPos = Vect2(0.0f, 0.0f);
+        Vect2 texStretch = Vect2(1.0f, 1.0f);
+
         Texture *tex = capture->LockTexture();
         if(tex)
         {
@@ -350,14 +475,16 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
 
             if(bStretch)
             {
-                Vect2 halfSize = size*0.5f;
-                Vect2 center = pos+halfSize;
+                //Vect2 halfSize = size*0.5f;
+                //Vect2 center = pos+halfSize;
+                Vect2 halfSize = API->GetBaseSize()*0.5f;
+                Vect2 center = halfSize;
                 center.x = float(round(center.x));
                 center.y = float(round(center.y));
 
                 Vect2 texSize = Vect2(float(tex->Width()), float(tex->Height()));
-                Vect2 outSize = size, outPos = Vect2(0.0f, 0.0f);
-                Vect2 lr = pos;
+                Vect2 outSize = API->GetBaseSize(), outPos = Vect2(0.0f, 0.0f);  //outSize = size,
+                Vect2 lr = Vect2(0.0f, 0.0f);
 
                 double sourceAspect = double(tex->Width())/double(tex->Height());
                 double baseAspect = double(outSize.x)/double(outSize.y);
@@ -369,7 +496,7 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
                     else
                         outSize.x = float(double(outSize.y) * sourceAspect);
 
-                    outPos = (size-outSize)*0.5f;
+                    outPos = (API->GetBaseSize()-outSize)*0.5f; //(size-outSize)*0.5f;
 
                     outPos.x = (float)round(outPos.x);
                     outPos.y = (float)round(outPos.y);
@@ -380,7 +507,10 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
 
                 lr += outSize;
                 lr += outPos;
-                outPos += pos;
+                //outPos += pos;
+
+                texPos = outPos;
+                texStretch = outSize/texSize;
 
                 if(bFlip)
                     DrawSprite(tex, 0xFFFFFFFF, outPos.x, lr.y, lr.x, outPos.y);
@@ -389,12 +519,15 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
             }
             else
             {
-                Vect2 halfSize = size*0.5f;
-                Vect2 center = pos+halfSize;
+                //Vect2 halfSize = size*0.5f;
+                //Vect2 center = pos+halfSize;
+                Vect2 halfSize = API->GetBaseSize()*0.5f;
+                Vect2 center = halfSize;
                 center.x = float(round(center.x));
                 center.y = float(round(center.y));
 
                 Vect2 texHalfSize = Vect2(float(tex->Width()/2), float(tex->Height()/2));
+                texPos = center-texHalfSize;
 
                 if(bFlip)
                     DrawSprite(tex, 0xFFFFFFFF, center.x-texHalfSize.x, center.y+texHalfSize.y, center.x+texHalfSize.x, center.y-texHalfSize.y);
@@ -405,6 +538,31 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
             capture->UnlockTexture();
 
             BlendFunction(GS_BLEND_SRCALPHA, GS_BLEND_INVSRCALPHA);
+        }
+
+        //----------------------------------------------------------
+        // draw mouse
+
+        if(bMouseCaptured && cursorTexture)
+        {
+            float fCursorX = (texPos.x + texStretch.x * float(cursorPos.x-xHotspot));
+            float fCursorY = (texPos.y + texStretch.y * float(cursorPos.y-xHotspot));
+            float fCursorCX = texStretch.x * float(cursorTexture->Width());
+            float fCursorCY = texStretch.y * float(cursorTexture->Height());
+
+            Shader *lastShader;
+            bool bInvertCursor = false;
+            if(invertShader)
+            {
+                lastShader = GetCurrentPixelShader();
+                if(bInvertCursor = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0)
+                    LoadPixelShader(invertShader);
+            }
+
+            DrawSprite(cursorTexture, 0xFFFFFFFF, fCursorX, fCursorY, fCursorX+fCursorCX, fCursorY+fCursorCY);
+
+            if(bInvertCursor)
+                LoadPixelShader(lastShader);
         }
     }
 }

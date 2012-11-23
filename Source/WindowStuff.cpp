@@ -590,7 +590,7 @@ LRESULT CALLBACK OBS::ListboxHook(HWND hwnd, UINT message, WPARAM wParam, LPARAM
                 selectedElement = sourcesElement->GetElementByID(selectedID);
 
                 curClassInfo = App->GetImageSourceClass(selectedElement->GetString(TEXT("class")));
-                if(curClassInfo->configProc)
+                if(curClassInfo && curClassInfo->configProc)
                 {
                     AppendMenu(hMenu, MF_SEPARATOR, 0, 0);
                     AppendMenu(hMenu, MF_STRING, ID_LISTBOX_CONFIG, Str("Listbox.Config"));
@@ -1585,8 +1585,6 @@ INT_PTR CALLBACK OBS::ReconnectDialogProc(HWND hwnd, UINT message, WPARAM wParam
 
 LRESULT CALLBACK OBS::OBSProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    traceIn(OBS::OBSProc);
-
     switch(message)
     {
         case WM_COMMAND:
@@ -1819,12 +1817,16 @@ LRESULT CALLBACK OBS::OBSProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
 
         case OBS_REQUESTSTOP:
             App->Stop();
-            if(!App->bAutoReconnect)
-                MessageBox(hwnd, Str("Connection.Disconnected"), NULL, 0);
-            else
+
+            if(wParam == 0)
             {
-                App->bReconnecting = false;
-                DialogBox(hinstMain, MAKEINTRESOURCE(IDD_RECONNECTING), hwnd, OBS::ReconnectDialogProc);
+                if(!App->bAutoReconnect)
+                    MessageBox(hwnd, Str("Connection.Disconnected"), NULL, 0);
+                else
+                {
+                    App->bReconnecting = false;
+                    DialogBox(hinstMain, MAKEINTRESOURCE(IDD_RECONNECTING), hwnd, OBS::ReconnectDialogProc);
+                }
             }
             break;
 
@@ -1858,8 +1860,6 @@ LRESULT CALLBACK OBS::OBSProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lPa
     }
 
     return 0;
-
-    traceOut;
 }
 
 ItemModifyType GetItemModifyType(const Vect2 &mousePos, const Vect2 &itemPos, const Vect2 &itemSize)
@@ -1901,8 +1901,6 @@ enum
 
 LRESULT CALLBACK OBS::RenderFrameProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    traceIn(OBS::RenderFrameProc);
-
     if(message == WM_LBUTTONDOWN)
     {
         POINTS pos;
@@ -1917,29 +1915,38 @@ LRESULT CALLBACK OBS::RenderFrameProc(HWND hwnd, UINT message, WPARAM wParam, LP
             bool bControlDown = HIBYTE(GetKeyState(VK_LCONTROL)) != 0 || HIBYTE(GetKeyState(VK_RCONTROL)) != 0;
 
             List<SceneItem*> items;
-            App->scene->GetItemsOnPoint(framePos, items);
-
-            if(items.Num())
+            App->scene->GetSelectedItems(items);
+            if(!items.Num())
             {
-                SceneItem *topItem = items.Last();
-                App->bItemWasSelected = topItem->bSelected;
+                App->scene->GetItemsOnPoint(framePos, items);
 
-                if(!bControlDown)
+                if(items.Num())
+                {
+                    SceneItem *topItem = items.Last();
+                    App->bItemWasSelected = topItem->bSelected;
+
+                    if(!bControlDown)
+                    {
+                        SendMessage(GetDlgItem(hwndMain, ID_SOURCES), LB_SELITEMRANGEEX, App->scene->NumSceneItems(), 0); 
+                        App->scene->DeselectAll();
+                    }
+
+                    topItem->Select(true);
+                    SendMessage(GetDlgItem(hwndMain, ID_SOURCES), LB_SETSEL, TRUE, topItem->GetID());
+
+                    if(App->modifyType == ItemModifyType_None)
+                        App->modifyType = ItemModifyType_Move;
+                }
+                else if(!bControlDown) //clicked on empty space without control
                 {
                     SendMessage(GetDlgItem(hwndMain, ID_SOURCES), LB_SELITEMRANGEEX, App->scene->NumSceneItems(), 0); 
                     App->scene->DeselectAll();
                 }
-
-                topItem->Select(true);
-                SendMessage(GetDlgItem(hwndMain, ID_SOURCES), LB_SETSEL, TRUE, topItem->GetID());
-
-                if(App->modifyType == ItemModifyType_None)
-                    App->modifyType = ItemModifyType_Move;
             }
-            else if(!bControlDown) //clicked on empty space without control
+            else
             {
-                SendMessage(GetDlgItem(hwndMain, ID_SOURCES), LB_SELITEMRANGEEX, App->scene->NumSceneItems(), 0); 
-                App->scene->DeselectAll();
+                SceneItem *topItem = items.Last();
+                App->bItemWasSelected = topItem->bSelected;
             }
 
             App->bMouseDown = true;
@@ -2364,6 +2371,30 @@ LRESULT CALLBACK OBS::RenderFrameProc(HWND hwnd, UINT message, WPARAM wParam, LP
                         lastItem->Select(false);
                         SendMessage(hwndSources, LB_SETSEL, FALSE, lastItem->GetID());
                     }
+                    else
+                    {
+                        if(items.Num())
+                        {
+                            SceneItem *topItem = items.Last();
+
+                            if(!bControlDown)
+                            {
+                                SendMessage(GetDlgItem(hwndMain, ID_SOURCES), LB_SELITEMRANGEEX, App->scene->NumSceneItems(), 0); 
+                                App->scene->DeselectAll();
+                            }
+
+                            topItem->Select(true);
+                            SendMessage(GetDlgItem(hwndMain, ID_SOURCES), LB_SETSEL, TRUE, topItem->GetID());
+
+                            if(App->modifyType == ItemModifyType_None)
+                                App->modifyType = ItemModifyType_Move;
+                        }
+                        else if(!bControlDown) //clicked on empty space without control
+                        {
+                            SendMessage(GetDlgItem(hwndMain, ID_SOURCES), LB_SELITEMRANGEEX, App->scene->NumSceneItems(), 0); 
+                            App->scene->DeselectAll();
+                        }
+                    }
                 }
                 else
                 {
@@ -2412,8 +2443,6 @@ LRESULT CALLBACK OBS::RenderFrameProc(HWND hwnd, UINT message, WPARAM wParam, LP
     }
 
     return DefWindowProc(hwnd, message, wParam, lParam);
-
-    traceOut;
 }
 
 typedef CTSTR (*GETPLUGINNAMEPROC)();

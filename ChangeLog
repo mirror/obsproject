@@ -1,6 +1,15 @@
 (yyyy-mm-dd)
 
 -------------------------------
+2012-11-25 - 0.448 (alpha)
+    * Fixed memory leak caused by the mouse cursor data not being
+      freed
+    * Fixed a potential crash that can happen to both the game and
+      the application in certain cases
+    * Padded CTS values by 75ms to compensate for any negative CTS
+      deviations
+
+-------------------------------
 2012-11-23 - 0.447 (alpha)
     * Changed the game capture cursor to use a regular texture
       rather than use a GDI texture, GDI texture went screwy

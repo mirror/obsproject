@@ -104,21 +104,28 @@ LRESULT WINAPI GraphicsCaptureSource::ReceiverWindowProc(HWND hwnd, UINT message
 
         case RECEIVER_NEWCAPTURE:
             {
-                GraphicsCaptureSource *source = (GraphicsCaptureSource*)GetWindowLongPtr(hwnd, 0);
-                if(source)
-                    source->NewCapture((LPVOID)lParam);
+                CaptureWindowData *data = (CaptureWindowData*)GetWindowLongPtr(hwnd, 0);
+                if(data->source)
+                    data->source->NewCapture((LPVOID)lParam);
             }
             return API->GetMaxFPS();
 
         case RECEIVER_ENDCAPTURE:
             {
-                GraphicsCaptureSource *source = (GraphicsCaptureSource*)GetWindowLongPtr(hwnd, 0);
-                if(source)
+                CaptureWindowData *data = (CaptureWindowData*)GetWindowLongPtr(hwnd, 0);
+                if(data->source)
                 {
                     API->EnterSceneMutex();
-                    source->EndCapture();
+                    data->source->EndCapture();
                     API->LeaveSceneMutex();
                 }
+            }
+            break;
+
+        case WM_DESTROY:
+            {
+                CaptureWindowData *data = (CaptureWindowData*)GetWindowLongPtr(hwnd, 0);
+                delete data;
             }
             break;
 
@@ -236,7 +243,8 @@ void GraphicsCaptureSource::BeginScene()
     if(bCaptureMouse && data->GetInt(TEXT("invertMouse")))
         invertShader = CreatePixelShaderFromFile(TEXT("shaders\\InvertTexture.pShader"));
 
-    hwndReceiver = CreateWindow(RECEIVER_WINDOWCLASS, NULL, 0, 0, 0, 0, 0, 0, 0, hinstMain, this);
+    windowData = new CaptureWindowData(this);
+    hwndReceiver = CreateWindow(RECEIVER_WINDOWCLASS, NULL, 0, 0, 0, 0, 0, 0, 0, hinstMain, windowData);
 
     AttemptCapture();
 }
@@ -326,6 +334,12 @@ void GraphicsCaptureSource::EndScene()
         hwndSender = NULL;
     }
 
+    if(windowData)
+    {
+        windowData->source = NULL;
+        windowData = NULL;
+    }
+
     if(hwndReceiver)
     {
         DestroyWindow(hwndReceiver);
@@ -393,6 +407,47 @@ inline double round(double val)
         return floor(val-0.5);
 }
 
+LPBYTE GetCursorData(HICON hIcon, ICONINFO &ii, UINT &size)
+{
+    BITMAP bmp;
+    HBITMAP hBmp = ii.hbmColor ? ii.hbmColor : ii.hbmMask;
+
+    if(GetObject(hBmp, sizeof(bmp), &bmp) != 0)
+    {
+        BITMAPINFO bi;
+        zero(&bi, sizeof(bi));
+
+        size = bmp.bmWidth;
+
+        void* lpBits;
+
+        BITMAPINFOHEADER &bih = bi.bmiHeader;
+        bih.biSize = sizeof(bih);
+        bih.biBitCount = 32;
+        bih.biWidth  = bmp.bmWidth;
+        bih.biHeight = bmp.bmHeight;
+        bih.biPlanes = 1;
+
+        HDC hTempDC = CreateCompatibleDC(NULL);
+        HBITMAP hBitmap = CreateDIBSection(hTempDC, &bi, DIB_RGB_COLORS, &lpBits, NULL, 0);
+        HBITMAP hbmpOld = (HBITMAP)SelectObject(hTempDC, hBitmap);
+
+        zero(lpBits, bmp.bmHeight*bmp.bmWidth*4);
+        DrawIcon(hTempDC, 0, 0, hIcon);
+
+        LPBYTE lpData = (LPBYTE)Allocate(bmp.bmHeight*bmp.bmWidth*4);
+        mcpy(lpData, lpBits, bmp.bmHeight*bmp.bmWidth*4);
+
+        SelectObject(hTempDC, hbmpOld);
+        DeleteObject(hBitmap);
+        DeleteDC(hTempDC);
+
+        return lpData;
+    }
+
+    return NULL;
+}
+
 void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
 {
     if(capture)
@@ -420,6 +475,7 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
                     else
                     {
                         HICON hIcon = CopyIcon(ci.hCursor);
+                        hCurrentCursor = ci.hCursor;
 
                         delete cursorTexture;
                         cursorTexture = NULL;
@@ -432,27 +488,19 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
                                 xHotspot = int(ii.xHotspot);
                                 yHotspot = int(ii.yHotspot);
 
-                                BITMAP bitmapInfo;
-                                HBITMAP hBitmap = (ii.hbmColor != NULL) ? ii.hbmColor : ii.hbmMask;
-
-                                if(hBitmap && GetObject(hBitmap, sizeof(BITMAP), &bitmapInfo) != 0)
+                                UINT size;
+                                LPBYTE lpData = GetCursorData(hIcon, ii, size);
+                                if(lpData)
                                 {
-                                    cursorTexture = CreateGDITexture(32, 32);
+                                    cursorTexture = CreateTexture(size, size, GS_BGRA, lpData, FALSE);
                                     if(cursorTexture)
-                                    {
-                                        HDC hDC;
-                                        if(cursorTexture->GetDC(hDC))
-                                        {
-                                            DrawIcon(hDC, 0, 0, hIcon);
-                                            cursorTexture->ReleaseDC();
-                                        }
-
                                         bMouseCaptured = true;
-                                    }
 
-                                    DeleteObject(ii.hbmColor);
-                                    DeleteObject(ii.hbmMask);
+                                    Free(lpData);
                                 }
+
+                                DeleteObject(ii.hbmColor);
+                                DeleteObject(ii.hbmMask);
                             }
 
                             DestroyIcon(hIcon);
@@ -559,7 +607,7 @@ void GraphicsCaptureSource::Render(const Vect2 &pos, const Vect2 &size)
                     LoadPixelShader(invertShader);
             }
 
-            DrawSprite(cursorTexture, 0xFFFFFFFF, fCursorX, fCursorY, fCursorX+fCursorCX, fCursorY+fCursorCY);
+            DrawSprite(cursorTexture, 0xFFFFFFFF, fCursorX, fCursorY+fCursorCY, fCursorX+fCursorCX, fCursorY);
 
             if(bInvertCursor)
                 LoadPixelShader(lastShader);

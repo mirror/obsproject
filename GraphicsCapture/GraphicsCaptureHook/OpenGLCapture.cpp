@@ -152,8 +152,6 @@ extern MemoryCopyData   *copyData;
 extern LPBYTE           textureBuffers[2];
 extern DWORD            curCapture;
 extern BOOL             bHasTextures;
-extern LONGLONG         frameTime;
-extern DWORD            fps;
 extern DWORD            copyWait;
 extern LONGLONG         lastTime;
 
@@ -216,8 +214,6 @@ void ClearGLData()
     copyData = NULL;
     copyWait = 0;
     lastTime = 0;
-    fps = 0;
-    frameTime = 0;
     curCapture = 0;
     curCPUTexture = 0;
     pCopyData = NULL;
@@ -289,10 +285,9 @@ void DoGLCPUHook(RECT &rc)
         glcaptureInfo.hwndCapture = hwndTarget;
         glcaptureInfo.pitch = glcaptureInfo.cx*4;
         glcaptureInfo.bFlip = TRUE;
-        fps = (DWORD)SendMessage(hwndReceiver, RECEIVER_NEWCAPTURE, 0, (LPARAM)&glcaptureInfo);
-        frameTime = (fps) ? 1000000/LONGLONG(fps) : 0;
+        PostMessage(hwndReceiver, RECEIVER_NEWCAPTURE, 0, (LPARAM)&glcaptureInfo);
 
-        logOutput << "DoGLCPUHook: success, fps = " << fps << ", frameTime = " << frameTime << endl;
+        logOutput << "DoGLCPUHook: success" << endl;
 
         OSInitializeTimer();
     }
@@ -431,52 +426,59 @@ void HandleGLSceneUpdate(HDC hDC)
 
         if(bHasTextures)
         {
+            LONGLONG frameTime;
             if(bCapturing)
             {
-                LONGLONG timeVal = OSGetTimeMicroseconds();
-                LONGLONG timeElapsed = timeVal-lastTime;
-
-                if(timeElapsed >= frameTime)
+                if(copyData)
                 {
-                    lastTime += frameTime;
-                    if(timeElapsed > frameTime*2)
-                        lastTime = timeVal;
-
-                    GLuint texture = gltextures[curCapture];
-                    DWORD nextCapture = (curCapture == NUM_BUFFERS-1) ? 0 : (curCapture+1);
-
-                    glReadBuffer(GL_BACK);
-                    glBindBuffer(GL_PIXEL_PACK_BUFFER, texture);
-
-                    if(glLockedTextures[curCapture])
+                    if(frameTime = copyData->frameTime)
                     {
-                        OSEnterMutex(glDataMutexes[curCapture]);
+                        LONGLONG timeVal = OSGetTimeMicroseconds();
+                        LONGLONG timeElapsed = timeVal-lastTime;
 
-                        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-                        glLockedTextures[curCapture] = false;
+                        if(timeElapsed >= frameTime)
+                        {
+                            lastTime += frameTime;
+                            if(timeElapsed > frameTime*2)
+                                lastTime = timeVal;
 
-                        OSLeaveMutex(glDataMutexes[curCapture]);
+                            GLuint texture = gltextures[curCapture];
+                            DWORD nextCapture = (curCapture == NUM_BUFFERS-1) ? 0 : (curCapture+1);
+
+                            glReadBuffer(GL_BACK);
+                            glBindBuffer(GL_PIXEL_PACK_BUFFER, texture);
+
+                            if(glLockedTextures[curCapture])
+                            {
+                                OSEnterMutex(glDataMutexes[curCapture]);
+
+                                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+                                glLockedTextures[curCapture] = false;
+
+                                OSLeaveMutex(glDataMutexes[curCapture]);
+                            }
+
+                            glReadPixels(0, 0, glcaptureInfo.cx, glcaptureInfo.cy, GL_BGRA, GL_UNSIGNED_BYTE, 0);
+
+                            //----------------------------------
+
+                            glBindBuffer(GL_PIXEL_PACK_BUFFER, gltextures[nextCapture]);
+                            pCopyData = (void*)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
+                            if(pCopyData)
+                            {
+                                curCPUTexture = nextCapture;
+                                glLockedTextures[nextCapture] = true;
+
+                                SetEvent(hCopyEvent);
+                            }
+
+                            //----------------------------------
+
+                            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
+                            curCapture = nextCapture;
+                        }
                     }
-
-                    glReadPixels(0, 0, glcaptureInfo.cx, glcaptureInfo.cy, GL_BGRA, GL_UNSIGNED_BYTE, 0);
-
-                    //----------------------------------
-
-                    glBindBuffer(GL_PIXEL_PACK_BUFFER, gltextures[nextCapture]);
-                    pCopyData = (void*)glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
-                    if(pCopyData)
-                    {
-                        curCPUTexture = nextCapture;
-                        glLockedTextures[nextCapture] = true;
-
-                        SetEvent(hCopyEvent);
-                    }
-
-                    //----------------------------------
-
-                    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-
-                    curCapture = nextCapture;
                 }
             }
             else

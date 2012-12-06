@@ -37,8 +37,6 @@ SharedTexData           *texData;
 extern DWORD            curCapture;
 extern BOOL             bHasTextures;
 extern BOOL             bIsMultisampled;
-extern LONGLONG         frameTime;
-extern DWORD            fps;
 extern LONGLONG         lastTime;
 
 extern DXGI_FORMAT      dxgiFormat;
@@ -57,6 +55,7 @@ void ClearD3D11Data()
     bHasTextures = false;
     if(texData)
         texData->lastRendered = -1;
+    texData = NULL;
 
     for(UINT i=0; i<2; i++)
     {
@@ -70,7 +69,6 @@ void ClearD3D11Data()
     SafeRelease(shareDevice);
 
     DestroySharedMemory();
-    texData = NULL;
 }
 
 void SetupD3D11(IDXGISwapChain *swapChain)
@@ -398,8 +396,7 @@ HRESULT STDMETHODCALLTYPE D3D11SwapPresentHook(IDXGISwapChain *swap, UINT syncIn
                             d3d11CaptureInfo.bFlip = FALSE;
                             texData->texHandles[0] = sharedHandles[0];
                             texData->texHandles[1] = sharedHandles[1];
-                            fps = (DWORD)SendMessage(hwndReceiver, RECEIVER_NEWCAPTURE, 0, (LPARAM)&d3d11CaptureInfo);
-                            frameTime = 1000000/LONGLONG(fps)/2;
+                            PostMessage(hwndReceiver, RECEIVER_NEWCAPTURE, 0, (LPARAM)&d3d11CaptureInfo);
 
                             logOutput << "DoD3D11Hook: success";
                         }
@@ -413,47 +410,54 @@ HRESULT STDMETHODCALLTYPE D3D11SwapPresentHook(IDXGISwapChain *swap, UINT syncIn
 
             if(bHasTextures)
             {
+                LONGLONG frameTime;
                 if(bCapturing)
                 {
-                    LONGLONG timeVal = OSGetTimeMicroseconds();
-                    LONGLONG timeElapsed = timeVal-lastTime;
-
-                    if(timeElapsed >= frameTime)
+                    if(texData)
                     {
-                        lastTime += frameTime;
-                        if(timeElapsed > frameTime*2)
-                            lastTime = timeVal;
-
-                        DWORD nextCapture = curCapture == 0 ? 1 : 0;
-
-                        ID3D11Resource *backBuffer = NULL;
-
-                        if(SUCCEEDED(swap->GetBuffer(0, IID_ID3D11Resource, (void**)&backBuffer)))
+                        if(frameTime = texData->frameTime)
                         {
-                            if(bIsMultisampled)
-                                context->ResolveSubresource(copyTextureGame, 0, backBuffer, 0, dxgiFormat);
-                            else
-                                context->CopyResource(copyTextureGame, backBuffer);
+                            LONGLONG timeVal = OSGetTimeMicroseconds();
+                            LONGLONG timeElapsed = timeVal-lastTime;
 
-                            ID3D10Texture2D *outputTexture = NULL;
-                            int lastRendered = -1;
-
-                            if(keyedMutexes[curCapture]->AcquireSync(0, 0) == WAIT_OBJECT_0)
-                                lastRendered = (int)curCapture;
-                            else if(keyedMutexes[nextCapture]->AcquireSync(0, 0) == WAIT_OBJECT_0)
-                                lastRendered = (int)nextCapture;
-
-                            if(lastRendered != -1)
+                            if(timeElapsed >= frameTime)
                             {
-                                shareDevice->CopyResource(sharedTextures[lastRendered], copyTextureIntermediary);
-                                keyedMutexes[lastRendered]->ReleaseSync(0);
+                                lastTime += frameTime;
+                                if(timeElapsed > frameTime*2)
+                                    lastTime = timeVal;
+
+                                DWORD nextCapture = curCapture == 0 ? 1 : 0;
+
+                                ID3D11Resource *backBuffer = NULL;
+
+                                if(SUCCEEDED(swap->GetBuffer(0, IID_ID3D11Resource, (void**)&backBuffer)))
+                                {
+                                    if(bIsMultisampled)
+                                        context->ResolveSubresource(copyTextureGame, 0, backBuffer, 0, dxgiFormat);
+                                    else
+                                        context->CopyResource(copyTextureGame, backBuffer);
+
+                                    ID3D10Texture2D *outputTexture = NULL;
+                                    int lastRendered = -1;
+
+                                    if(keyedMutexes[curCapture]->AcquireSync(0, 0) == WAIT_OBJECT_0)
+                                        lastRendered = (int)curCapture;
+                                    else if(keyedMutexes[nextCapture]->AcquireSync(0, 0) == WAIT_OBJECT_0)
+                                        lastRendered = (int)nextCapture;
+
+                                    if(lastRendered != -1)
+                                    {
+                                        shareDevice->CopyResource(sharedTextures[lastRendered], copyTextureIntermediary);
+                                        keyedMutexes[lastRendered]->ReleaseSync(0);
+                                    }
+
+                                    texData->lastRendered = lastRendered;
+                                    backBuffer->Release();
+                                }
+
+                                curCapture = nextCapture;
                             }
-
-                            texData->lastRendered = lastRendered;
-                            backBuffer->Release();
                         }
-
-                        curCapture = nextCapture;
                     }
                 }
                 else
@@ -499,11 +503,19 @@ bool InitD3D11Capture()
             ID3D11Device *device;
             ID3D11DeviceContext *context;
 
-            D3D_FEATURE_LEVEL desiredLevel = D3D_FEATURE_LEVEL_11_0;
+            D3D_FEATURE_LEVEL desiredLevels[6] =
+            {
+                D3D_FEATURE_LEVEL_11_0,
+                D3D_FEATURE_LEVEL_10_1,
+                D3D_FEATURE_LEVEL_10_0,
+                D3D_FEATURE_LEVEL_9_3,
+                D3D_FEATURE_LEVEL_9_2,
+                D3D_FEATURE_LEVEL_9_1,
+            };
             D3D_FEATURE_LEVEL receivedLevel;
 
             HRESULT hErr;
-            if(SUCCEEDED(hErr = (*d3d11Create)(NULL, D3D_DRIVER_TYPE_NULL, NULL, 0, &desiredLevel, 1, D3D11_SDK_VERSION, &swapDesc, &swap, &device, &receivedLevel, &context)))
+            if(SUCCEEDED(hErr = (*d3d11Create)(NULL, D3D_DRIVER_TYPE_NULL, NULL, 0, desiredLevels, 6, D3D11_SDK_VERSION, &swapDesc, &swap, &device, &receivedLevel, &context)))
             {
                 bSuccess = true;
 
@@ -520,7 +532,7 @@ bool InitD3D11Capture()
             }
             else
             {
-                RUNONCE logOutput << "InitD3D11Capture: D3D11CreateDeviceAndSwapChain failed, result = " << UINT(hErr) << endl;
+                RUNONCE logOutput << "InitD3D11Capture: D3D11CreateDeviceAndSwapChain definitely failed, result = " << UINT(hErr) << endl;
             }
         }
         else

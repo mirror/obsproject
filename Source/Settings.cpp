@@ -103,7 +103,7 @@ INT_PTR CALLBACK OBS::GeneralSettingsProc(HWND hwnd, UINT message, WPARAM wParam
 
                 if(hFind = OSFindFirstFile(strProfilesWildcard, ofd))
                 {
-                    do 
+                    do
                     {
                         if(ofd.bDirectory) continue;
 
@@ -390,7 +390,7 @@ String LoadSettingTextComboString(HWND hwnd, CTSTR lpConfigSection, CTSTR lpConf
 }
 
 
-CTSTR preset_names[10] = {TEXT("ultrafast"), TEXT("superfast"), TEXT("veryfast"), TEXT("faster"), TEXT("fast"), TEXT("medium"), TEXT("slow"), TEXT("slower"), TEXT("veryslow"), TEXT("placebo")};
+CTSTR preset_names[7] = {TEXT("ultrafast"), TEXT("superfast"), TEXT("veryfast"), TEXT("faster"), TEXT("fast"), TEXT("medium"), TEXT("slow")};
 
 INT_PTR CALLBACK OBS::EncoderSettingsProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
@@ -1517,10 +1517,18 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
                 bool bUseMTOptimizations = AppConfig->GetInt(TEXT("General"), TEXT("UseMultithreadedOptimizations"), TRUE) != 0;
                 SendMessage(GetDlgItem(hwnd, IDC_USEMULTITHREADEDOPTIMIZATIONS), BM_SETCHECK, bUseMTOptimizations ? BST_CHECKED : BST_UNCHECKED, 0);
 
+                HWND hwndTemp = GetDlgItem(hwnd, IDC_PRIORITY);
+                SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("High"));
+                SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("Above Normal"));
+                SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("Normal"));
+                SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("Idle"));
+                
+                LoadSettingComboString(hwndTemp, TEXT("General"), TEXT("Priority"), TEXT("Normal"));
+
                 //--------------------------------------------
 
-                HWND hwndTemp = GetDlgItem(hwnd, IDC_PRESET);
-                for(int i=0; i<10; i++)
+                hwndTemp = GetDlgItem(hwnd, IDC_PRESET);
+                for(int i=0; i<7; i++)
                     SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)preset_names[i]);
 
                 LoadSettingComboString(hwndTemp, TEXT("Video Encoding"), TEXT("Preset"), TEXT("veryfast"));
@@ -1528,6 +1536,11 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
                 ti.lpszText = (LPWSTR)Str("Settings.Advanced.VideoEncoderCPUTradeoffTooltip");
                 ti.uId = (UINT_PTR)hwndTemp;
                 SendMessage(hwndToolTip, TTM_ADDTOOL, 0, (LPARAM)&ti);
+
+                //------------------------------------
+
+                bool bUseCBR = AppConfig->GetInt(TEXT("Video Encoding"), TEXT("UseCBR")) != 0;
+                SendMessage(GetDlgItem(hwnd, IDC_USECBR), BM_SETCHECK, bUseCBR ? BST_CHECKED : BST_UNCHECKED, 0);
 
                 //------------------------------------
 
@@ -1580,7 +1593,7 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
 
                 //------------------------------------
 
-                BOOL bUseSendBuffer = AppConfig->GetInt(TEXT("Publish"), TEXT("UseSendBuffer"), 1) != 0;
+                BOOL bUseSendBuffer = AppConfig->GetInt(TEXT("Publish"), TEXT("UseSendBuffer"), 0) != 0;
                 SendMessage(GetDlgItem(hwnd, IDC_USESENDBUFFER), BM_SETCHECK, bUseSendBuffer ? BST_CHECKED : BST_UNCHECKED, 0);
 
                 hwndTemp = GetDlgItem(hwnd, IDC_SENDBUFFERSIZE);
@@ -1590,7 +1603,7 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
                 SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("2920"));
                 SendMessage(hwndTemp, CB_ADDSTRING, 0, (LPARAM)TEXT("1460"));
 
-                LoadSettingEditString(hwndTemp, TEXT("Publish"), TEXT("SendBufferSize"), TEXT("1460"));
+                LoadSettingEditString(hwndTemp, TEXT("Publish"), TEXT("SendBufferSize"), TEXT("5840"));
 
                 ti.lpszText = (LPWSTR)Str("Settings.Advanced.UseSendBufferTooltip");
                 ti.uId = (UINT_PTR)GetDlgItem(hwnd, IDC_USESENDBUFFER);
@@ -1598,6 +1611,8 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
 
                 //------------------------------------
 
+                //need this as some of the dialog item sets above trigger the notifications
+                ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_HIDE);
                 App->SetChangedSettings(false);
                 return TRUE;
             }
@@ -1646,10 +1661,47 @@ INT_PTR CALLBACK OBS::AdvancedSettingsProc(HWND hwnd, UINT message, WPARAM wPara
                     }
                     break;
 
-                case IDC_SENDBUFFERSIZE:
                 case IDC_PRESET:
+                    if(HIWORD(wParam) == CBN_SELCHANGE)
+                    {
+                        HWND hwndTemp = (HWND)lParam;
+
+                        String strNewPreset = GetCBText(hwndTemp);
+                        if (scmp(strNewPreset.Array(), AppConfig->GetString(TEXT("Video Encoding"), TEXT("Preset"), TEXT("veryfast"))))
+                        {
+                            static BOOL bHasWarned = FALSE;
+                            if (!bHasWarned && MessageBox(hwnd, Str("Settings.Advanced.PresetWarning"), NULL, MB_ICONEXCLAMATION | MB_YESNO) == IDNO)
+                            {
+                                LoadSettingComboString(hwndTemp, TEXT("Video Encoding"), TEXT("Preset"), TEXT("veryfast"));
+                            }
+                            else
+                            {
+                                bHasWarned = TRUE;
+                                ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_SHOW);
+                                App->SetChangedSettings(true);
+                            }
+                        }
+                    }
+                    break;
+
+                case IDC_SENDBUFFERSIZE:
+                case IDC_PRIORITY:
                     if(HIWORD(wParam) == CBN_SELCHANGE || HIWORD(wParam) == CBN_EDITCHANGE)
                     {
+                        ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_SHOW);
+                        App->SetChangedSettings(true);
+                    }
+                    break;
+
+                case IDC_USECBR:
+                    if(HIWORD(wParam) == BN_CLICKED)
+                    {
+                        String strText;
+                        strText << Str("Settings.Advanced.UseCBR");
+                        if(SendMessage((HWND)lParam, BM_GETCHECK, 0, 0) == BST_CHECKED)
+                            strText << TEXT(" (..I hope you know what you're doing)");
+
+                        SetWindowText((HWND)lParam, strText.Array());
                         ShowWindow(GetDlgItem(hwnd, IDC_INFO), SW_SHOW);
                         App->SetChangedSettings(true);
                     }
@@ -1920,6 +1972,14 @@ void OBS::ApplySettings()
                 bool bUseMTOptimizations = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_USEMULTITHREADEDOPTIMIZATIONS), BM_GETCHECK, 0, 0) == BST_CHECKED;
                 AppConfig->SetInt(TEXT("General"), TEXT("UseMultithreadedOptimizations"), bUseMTOptimizations);
 
+                strTemp = GetCBText(GetDlgItem(hwndCurrentSettings, IDC_PRIORITY));
+                AppConfig->SetString(TEXT("General"), TEXT("Priority"), strTemp);
+
+                //--------------------------------------------------
+
+                bool bUseCBR = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_USECBR), BM_GETCHECK, 0, 0) == BST_CHECKED;
+                AppConfig->SetInt   (TEXT("Video Encoding"), TEXT("UseCBR"),            bUseCBR);
+
                 //--------------------------------------------------
 
                 BOOL bUseCustomX264Settings = SendMessage(GetDlgItem(hwndCurrentSettings, IDC_USEVIDEOENCODERSETTINGS), BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -1955,6 +2015,7 @@ void OBS::ApplySettings()
 
                 AppConfig->SetInt   (TEXT("Publish"),        TEXT("UseSendBuffer"),     bUseSendBuffer);
                 AppConfig->SetString(TEXT("Publish"),        TEXT("SendBufferSize"),    strSendBufferSize);
+
                 break;
             }
     }

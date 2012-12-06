@@ -55,7 +55,7 @@ bool STDCALL ConfigureTextSource(XElement *element, bool bCreating);
 ImageSource* STDCALL CreateGlobalSource(XElement *data);
 
 //NetworkStream* CreateRTMPServer();
-NetworkStream* CreateRTMPPublisher(String &failReason, bool &bCanRetry);
+NetworkStream* CreateRTMPPublisher();
 NetworkStream* CreateDelayedPublisher(DWORD delayTime);
 NetworkStream* CreateBandwidthAnalyzer();
 
@@ -521,8 +521,8 @@ OBS::OBS()
     borderYSize += GetSystemMetrics(SM_CYMENU);
     borderYSize += GetSystemMetrics(SM_CYCAPTION);
 
-    clientWidth  = AppConfig->GetInt(TEXT("General"), TEXT("Width"),  700);
-    clientHeight = AppConfig->GetInt(TEXT("General"), TEXT("Height"), 553);
+    clientWidth  = GlobalConfig->GetInt(TEXT("General"), TEXT("Width"),  700);
+    clientHeight = GlobalConfig->GetInt(TEXT("General"), TEXT("Height"), 553);
 
     if(clientWidth < minClientWidth)
         clientWidth = minClientWidth;
@@ -542,6 +542,29 @@ OBS::OBS()
 
     int x = (fullscreenX/2)-(cx/2);
     int y = (fullscreenY/2)-(cy/2);
+
+    int posX = GlobalConfig->GetInt(TEXT("General"), TEXT("PosX"));
+    int posY = GlobalConfig->GetInt(TEXT("General"), TEXT("PosY"));
+
+    bool bInsideMonitors = false;
+    if(posX || posY)
+    {
+        for(UINT i=0; i<monitors.Num(); i++)
+        {
+            if( posX >= monitors[i].rect.left && posX < monitors[i].rect.right  &&
+                posY >= monitors[i].rect.top  && posY < monitors[i].rect.bottom )
+            {
+                bInsideMonitors = true;
+                break;
+            }
+        }
+    }
+
+    if(bInsideMonitors)
+    {
+        x = posX;
+        y = posY;
+    }
 
     hwndMain = CreateWindowEx(WS_EX_CONTROLPARENT|WS_EX_WINDOWEDGE, OBS_WINDOW_CLASS, OBS_VERSION_STRING,
         WS_OVERLAPPED | WS_THICKFRAME | WS_MINIMIZEBOX | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN,
@@ -724,6 +747,12 @@ OBS::OBS()
         scenes = scenesConfig.CreateElement(TEXT("scenes"));
 
     UINT numScenes = scenes->NumElements();
+    if(!numScenes)
+    {
+        scenes->CreateElement(Str("Scene"));
+        numScenes++;
+    }
+
     for(UINT i=0; i<numScenes; i++)
     {
         XElement *scene = scenes->GetElementByID(i);
@@ -873,8 +902,13 @@ OBS::~OBS()
 
     //DestroyWindow(hwndMain);
 
-    AppConfig->SetInt(TEXT("General"), TEXT("Width"),  clientWidth);
-    AppConfig->SetInt(TEXT("General"), TEXT("Height"), clientHeight);
+    RECT rcWindow;
+    GetWindowRect(hwndMain, &rcWindow);
+
+    GlobalConfig->SetInt(TEXT("General"), TEXT("PosX"),   rcWindow.left);
+    GlobalConfig->SetInt(TEXT("General"), TEXT("PosY"),   rcWindow.top);
+    GlobalConfig->SetInt(TEXT("General"), TEXT("Width"),  clientWidth);
+    GlobalConfig->SetInt(TEXT("General"), TEXT("Height"), clientHeight);
 
     scenesConfig.Close(true);
 
@@ -1091,7 +1125,6 @@ void OBS::Start()
     int networkMode = AppConfig->GetInt(TEXT("Publish"), TEXT("Mode"), 2);
     DWORD delayTime = (DWORD)AppConfig->GetInt(TEXT("Publish"), TEXT("Delay"));
 
-    bool bCanRetry = false;
     String strError;
 
     if(bTestStream)
@@ -1100,14 +1133,14 @@ void OBS::Start()
     {
         switch(networkMode)
         {
-            case 0: network = (delayTime > 0) ? CreateDelayedPublisher(delayTime) : CreateRTMPPublisher(strError, bCanRetry); break;
+            case 0: network = (delayTime > 0) ? CreateDelayedPublisher(delayTime) : CreateRTMPPublisher(); break;
             case 1: network = CreateNullNetwork(); break;
         }
     }
 
     if(!network)
     {
-        if(!bReconnecting || !bCanRetry)
+        if(!bReconnecting)
             MessageBox(hwndMain, strError, NULL, MB_ICONERROR);
         else
             DialogBox(hinstMain, MAKEINTRESOURCE(IDD_RECONNECTING), hwndMain, OBS::ReconnectDialogProc);
@@ -1352,6 +1385,7 @@ void OBS::Start()
 
     //-------------------------------------------------------------
 
+    ctsOffset = 0;
     videoEncoder = CreateX264Encoder(fps, outputCX, outputCY, quality, preset, bUsing444, maxBitRate, bufferSize);
 
     //-------------------------------------------------------------
@@ -1877,9 +1911,6 @@ void OBS::MainCaptureLoop()
         curStreamTime = renderStartTime-firstFrameTime;
         DWORD frameDelta = curStreamTime-lastStreamTime;
 
-        if(frameDelta < 0 || frameDelta > 4000)
-            nop();
-
         if(bUseSyncFix)
         {
             OSEnterMutex(hSoundDataMutex);
@@ -2226,7 +2257,7 @@ void OBS::MainCaptureLoop()
 
                     profileIn("call to encoder");
 
-                    videoEncoder->Encode(&picOut, videoPackets, videoPacketTypes, curTimeStamp);
+                    videoEncoder->Encode(&picOut, videoPackets, videoPacketTypes, curTimeStamp, ctsOffset);
                     if(bUsing444) prevTexture->Unmap(0);
 
                     profileOut;
@@ -2236,6 +2267,8 @@ void OBS::MainCaptureLoop()
 
                     bool bSendingVideo = videoPackets.Num() > 0;
 
+                    profileIn("sending stuff out");
+
                     //send headers before the first frame if not yet sent
                     if(bSendingVideo)
                     {
@@ -2244,10 +2277,10 @@ void OBS::MainCaptureLoop()
                             network->BeginPublishing();
                             bSentHeaders = true;
 
-                            DataPacket seiPacket;
+                            /*DataPacket seiPacket;
                             videoEncoder->GetSEI(seiPacket);
 
-                            network->SendPacket(seiPacket.lpPacket, seiPacket.size, 0, PacketType_VideoHighest);
+                            network->SendPacket(seiPacket.lpPacket, seiPacket.size, 0, PacketType_VideoHighest);*/
                         }
 
                         OSEnterMutex(hSoundDataMutex);
@@ -2255,15 +2288,15 @@ void OBS::MainCaptureLoop()
                         if(pendingAudioFrames.Num())
                         {
                             //Log(TEXT("pending frames %u, (in milliseconds): %u"), pendingAudioFrames.Num(), pendingAudioFrames.Last().timestamp-pendingAudioFrames[0].timestamp);
-                            while(pendingAudioFrames.Num() && pendingAudioFrames[0].timestamp+75 < curTimeStamp)
+                            while(pendingAudioFrames.Num() && (pendingAudioFrames[0].timestamp+ctsOffset) < curTimeStamp)
                             {
                                 List<BYTE> &audioData = pendingAudioFrames[0].audioData;
 
                                 if(audioData.Num())
                                 {
-                                    network->SendPacket(audioData.Array(), audioData.Num(), pendingAudioFrames[0].timestamp+75, PacketType_Audio);
+                                    network->SendPacket(audioData.Array(), audioData.Num(), pendingAudioFrames[0].timestamp+ctsOffset, PacketType_Audio);
                                     if(fileStream)
-                                        fileStream->AddPacket(audioData.Array(), audioData.Num(), pendingAudioFrames[0].timestamp+75, PacketType_Audio);
+                                        fileStream->AddPacket(audioData.Array(), audioData.Num(), pendingAudioFrames[0].timestamp+ctsOffset, PacketType_Audio);
 
                                     audioData.Clear();
                                 }
@@ -2291,6 +2324,8 @@ void OBS::MainCaptureLoop()
 
                         bufferedTimes.Remove(0);
                     }
+
+                    profileOut;
                 }
             }
 
@@ -2331,7 +2366,8 @@ void OBS::MainCaptureLoop()
         DWORD renderStopTime = OSGetTime();
         DWORD totalTime = renderStopTime-renderStartTime;
 
-        //OSDebugOut(TEXT("Total frame time: %d\r\n"), totalTime);
+        //OSDebugOut(TEXT("Frame adjust time: %d, "), frameTimeAdjust-totalTime);
+
         if(totalTime > frameTimeAdjust)
             numLongFrames++;
 
